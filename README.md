@@ -1,4 +1,4 @@
-# MTG Vault
+# EZ MTG
 
 Local-first Magic: The Gathering deck and collection manager built with React, Vite, IndexedDB, and the Scryfall API.
 
