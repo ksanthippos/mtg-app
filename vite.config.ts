@@ -11,7 +11,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'cards-icon.svg'],
+      includeAssets: ['mtg-vault.svg'],
       manifest: {
         name: 'MTG Vault',
         short_name: 'MTGVault',
@@ -22,19 +22,12 @@ export default defineConfig({
         orientation: 'portrait',
         icons: [
           {
-            src: 'pwa-192x192.png',
-            sizes: '192x192',
-            type: 'image/png'
-          },
-          {
-            src: 'pwa-512x512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'any maskable'
+            src: 'mtg-vault.svg',
+            sizes: 'any',
+            type: 'image/svg+xml'
           }
         ]
       }
     })
   ],
 })
-
