@@ -5,12 +5,19 @@ export interface MtgCard {
   cmc?: number;
   type_line: string;
   oracle_text?: string;
+  power?: string;
+  toughness?: string;
+  loyalty?: string;
+  defense?: string;
   colors?: string[];
   color_identity?: string[];
+  keywords?: string[];
   set: string;
   set_name?: string;
   collector_number: string;
   rarity: string;
+  lang?: string;
+  prints_search_uri?: string;
   image_uris?: {
     small?: string;
     normal?: string;
@@ -22,6 +29,10 @@ export interface MtgCard {
     mana_cost?: string;
     type_line?: string;
     oracle_text?: string;
+    power?: string;
+    toughness?: string;
+    loyalty?: string;
+    defense?: string;
     image_uris?: {
       small?: string;
       normal?: string;

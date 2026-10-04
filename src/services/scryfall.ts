@@ -3,6 +3,16 @@ import type { MtgCard } from '../types';
 
 const SCRYFALL_API = 'https://api.scryfall.com';
 
+export async function fetchCardSymbolUris(): Promise<Map<string, string>> {
+  const response = await fetch(`${SCRYFALL_API}/symbology`);
+  if (!response.ok) {
+    throw new Error(`Scryfall-symbolien haku epäonnistui: ${response.status} ${response.statusText}`);
+  }
+
+  const result: { data?: Array<{ symbol: string; svg_uri: string }> } = await response.json();
+  return new Map((result.data ?? []).map(({ symbol, svg_uri }) => [symbol, svg_uri]));
+}
+
 // Clean and normalize Scryfall card response into our lightweight MtgCard format
 // Notice we NEVER download the image blob, we only store the Scryfall CDN URLs.
 export function sanitizeScryfallCard(raw: any): MtgCard {
@@ -13,12 +23,19 @@ export function sanitizeScryfallCard(raw: any): MtgCard {
     cmc: raw.cmc,
     type_line: raw.type_line,
     oracle_text: raw.oracle_text,
+    power: raw.power,
+    toughness: raw.toughness,
+    loyalty: raw.loyalty,
+    defense: raw.defense,
     colors: raw.colors,
     color_identity: raw.color_identity,
+    keywords: raw.keywords,
     set: raw.set,
     set_name: raw.set_name,
     collector_number: raw.collector_number,
     rarity: raw.rarity,
+    lang: raw.lang,
+    prints_search_uri: raw.prints_search_uri,
     image_uris: raw.image_uris ? {
       small: raw.image_uris.small,
       normal: raw.image_uris.normal,
@@ -30,6 +47,10 @@ export function sanitizeScryfallCard(raw: any): MtgCard {
       mana_cost: face.mana_cost,
       type_line: face.type_line,
       oracle_text: face.oracle_text,
+      power: face.power,
+      toughness: face.toughness,
+      loyalty: face.loyalty,
+      defense: face.defense,
       image_uris: face.image_uris ? {
         small: face.image_uris.small,
         normal: face.image_uris.normal,
@@ -39,6 +60,37 @@ export function sanitizeScryfallCard(raw: any): MtgCard {
     })) : undefined,
     scryfall_uri: raw.scryfall_uri,
     cached_at: Date.now(),
+  };
+}
+
+export async function searchCardPrintings(
+  card: MtgCard,
+  page = 1,
+): Promise<{ cards: MtgCard[]; hasMore: boolean; totalCards: number }> {
+  const url = card.prints_search_uri
+    ? new URL(card.prints_search_uri)
+    : new URL(`${SCRYFALL_API}/cards/search`);
+
+  if (!card.prints_search_uri) {
+    url.searchParams.set('q', `!"${card.name}"`);
+    url.searchParams.set('unique', 'prints');
+    url.searchParams.set('order', 'released');
+    url.searchParams.set('dir', 'desc');
+  }
+  url.searchParams.set('page', String(page));
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Scryfall-julkaisujen haku epäonnistui: ${response.status} ${response.statusText}`);
+  }
+
+  const result = await response.json();
+  const cards = (result.data ?? []).map(sanitizeScryfallCard);
+
+  return {
+    cards,
+    hasMore: result.has_more ?? false,
+    totalCards: result.total_cards ?? cards.length,
   };
 }
 
