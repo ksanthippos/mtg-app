@@ -54,6 +54,7 @@ export interface DeckCard {
 export interface Deck {
   id: string;
   name: string;
+  commanderCardId?: string;
   format?: string;
   description?: string;
   colors?: string[];
