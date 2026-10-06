@@ -48,6 +48,7 @@ export interface DeckCard {
   cardId: string; // references MtgCard.id
   card: MtgCard; // embedded snapshot for instant rendering offline
   count: number;
+  addedAt?: number;
   isSideboard?: boolean;
 }
 

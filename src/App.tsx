@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Crown,
+  Copy,
   Download,
   FolderPlus,
   LayoutGrid,
@@ -98,6 +99,34 @@ type CardFilters = {
   toughness: string;
 };
 
+type CardSortKey = 'name' | 'manaValue' | 'addedAt';
+type SortDirection = 'asc' | 'desc';
+
+function sortCardEntries<T extends { card: MtgCard; addedAt?: number }>(
+  entries: T[],
+  sortKey: CardSortKey,
+  direction: SortDirection,
+): T[] {
+  const directionFactor = direction === 'asc' ? 1 : -1;
+  return [...entries].sort((left, right) => {
+    let comparison = 0;
+    if (sortKey === 'name') {
+      comparison = left.card.name.localeCompare(right.card.name, 'fi', { sensitivity: 'base' });
+    } else if (sortKey === 'manaValue') {
+      const leftManaValue = left.card.cmc;
+      const rightManaValue = right.card.cmc;
+      if (leftManaValue === undefined && rightManaValue !== undefined) return 1;
+      if (leftManaValue !== undefined && rightManaValue === undefined) return -1;
+      comparison = (leftManaValue ?? 0) - (rightManaValue ?? 0);
+    } else {
+      comparison = (left.addedAt ?? 0) - (right.addedAt ?? 0);
+    }
+    return comparison === 0
+      ? left.card.name.localeCompare(right.card.name, 'fi', { sensitivity: 'base' })
+      : comparison * directionFactor;
+  });
+}
+
 const emptyCardFilters: CardFilters = {
   color: '',
   type: '',
@@ -172,12 +201,20 @@ function CardFilterControls({
   searchValue,
   onSearchChange,
   searchLabel,
+  sortKey,
+  onSortKeyChange,
+  sortDirection,
+  onSortDirectionChange,
 }: {
   filters: CardFilters;
   onChange: (filters: CardFilters) => void;
   searchValue?: string;
   onSearchChange?: (value: string) => void;
   searchLabel?: string;
+  sortKey?: CardSortKey;
+  onSortKeyChange?: (value: CardSortKey) => void;
+  sortDirection?: SortDirection;
+  onSortDirectionChange?: (value: SortDirection) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const hasFilters = Object.values(filters).some(Boolean);
@@ -186,7 +223,7 @@ function CardFilterControls({
 
   return (
     <div className="mb-4">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {onSearchChange && (
           <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-slate-400 focus-within:border-violet-500">
             <Search size={16} className="shrink-0" />
@@ -208,6 +245,36 @@ function CardFilterControls({
                 <X size={16} />
               </button>
             )}
+          </div>
+        )}
+        {sortKey && onSortKeyChange && sortDirection && onSortDirectionChange && (
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <label htmlFor={`card-sort-${searchLabel ?? 'list'}`} className="sr-only">Järjestä kortit</label>
+            <select
+              id={`card-sort-${searchLabel ?? 'list'}`}
+              value={sortKey}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value === 'name' || value === 'manaValue' || value === 'addedAt') {
+                  onSortKeyChange(value);
+                }
+              }}
+              aria-label="Järjestä kortit"
+              className="max-w-36 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-2 text-sm text-slate-200 focus:border-violet-500 focus:outline-none"
+            >
+              <option value="name">Nimi</option>
+              <option value="manaValue">Manan arvo</option>
+              <option value="addedAt">Lisäyspäivä</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => onSortDirectionChange(sortDirection === 'asc' ? 'desc' : 'asc')}
+              aria-label={sortDirection === 'asc' ? 'Nouseva järjestys' : 'Laskeva järjestys'}
+              title={sortDirection === 'asc' ? 'Nouseva järjestys' : 'Laskeva järjestys'}
+              className="rounded-lg border border-slate-700 bg-slate-950/60 p-2 text-slate-300 hover:border-violet-500 hover:text-white"
+            >
+              <ArrowUpDown size={16} className={sortDirection === 'desc' ? 'rotate-180' : ''} />
+            </button>
           </div>
         )}
         <button
@@ -329,7 +396,16 @@ function App() {
   const [dirtyCollectionIds, setDirtyCollectionIds] = useState<Set<string>>(() => new Set());
   const [openDeckMenuId, setOpenDeckMenuId] = useState<string | null>(null);
   const [commanderPickerDeckId, setCommanderPickerDeckId] = useState<string | null>(null);
-  const [deckNameDialog, setDeckNameDialog] = useState<{ mode: 'create' } | { mode: 'rename'; deckId: string } | null>(null);
+  const [deckNameDialog, setDeckNameDialog] = useState<
+    { mode: 'create' }
+    | { mode: 'rename'; deckId: string }
+    | { mode: 'duplicate'; deckId: string }
+    | null
+  >(null);
+  const [deckSortKey, setDeckSortKey] = useState<CardSortKey>('name');
+  const [deckSortDirection, setDeckSortDirection] = useState<SortDirection>('asc');
+  const [collectionSortKey, setCollectionSortKey] = useState<CardSortKey>('name');
+  const [collectionSortDirection, setCollectionSortDirection] = useState<SortDirection>('asc');
   const [deckNameInput, setDeckNameInput] = useState('');
   const [selectedDeckId, setSelectedDeckId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -341,6 +417,7 @@ function App() {
   const [loadingMoreSearchResults, setLoadingMoreSearchResults] = useState(false);
   const [symbolUris, setSymbolUris] = useState<Map<string, string>>(() => new Map());
   const [previewCard, setPreviewCard] = useState<MtgCard | null>(null);
+  const [previewSource, setPreviewSource] = useState<'printings' | null>(null);
   const [printingCard, setPrintingCard] = useState<MtgCard | null>(null);
   const [printings, setPrintings] = useState<MtgCard[]>([]);
   const [selectedPrinting, setSelectedPrinting] = useState<MtgCard | null>(null);
@@ -373,9 +450,13 @@ function App() {
     [selectedDeck, deckFilters, deckSearch],
   );
   const commanderEntry = selectedDeck?.cards.find((entry) => entry.cardId === selectedDeck.commanderCardId) ?? null;
+  const sortedDeckCards = useMemo(
+    () => sortCardEntries(filteredDeckCards, deckSortKey, deckSortDirection),
+    [filteredDeckCards, deckSortKey, deckSortDirection],
+  );
   const visibleDeckCards = useMemo(
-    () => filteredDeckCards.filter((entry) => entry.cardId !== selectedDeck?.commanderCardId),
-    [filteredDeckCards, selectedDeck?.commanderCardId],
+    () => sortedDeckCards.filter((entry) => entry.cardId !== selectedDeck?.commanderCardId),
+    [sortedDeckCards, selectedDeck?.commanderCardId],
   );
   const groupedDeckCards = useMemo(
     () => deckCardCategories
@@ -402,15 +483,20 @@ function App() {
   const filteredCollection = useMemo(
     () => {
       const query = collectionSearch.trim().toLocaleLowerCase();
-      return collection.filter(({ card }) => {
+      const matches = collection.filter(({ card }) => {
         const searchableText = [card.name, card.type_line, card.set_name, card.oracle_text, card.set]
           .filter(Boolean)
           .join(' ')
           .toLocaleLowerCase();
         return matchesCardFilters(card, collectionFilters) && (!query || searchableText.includes(query));
       });
+      return matches;
     },
     [collection, collectionFilters, collectionSearch],
+  );
+  const sortedCollection = useMemo(
+    () => sortCardEntries(filteredCollection, collectionSortKey, collectionSortDirection),
+    [filteredCollection, collectionSortKey, collectionSortDirection],
   );
   const filteredSearchResults = useMemo(
     () => searchResults.filter((card) => matchesCardFilters(card, searchFilters)),
@@ -421,11 +507,12 @@ function App() {
     [filteredSearchResults, visibleSearchCount],
   );
   const previewCards = useMemo(() => {
+    if (previewSource === 'printings') return printings;
     if (tab === 'search') return visibleFilteredSearchResults;
     if (tab === 'decks') return [...(commanderEntry ? [commanderEntry] : []), ...visibleDeckCards].map((entry) => entry.card);
-    if (tab === 'collection') return filteredCollection.map((entry) => entry.card);
+    if (tab === 'collection') return sortedCollection.map((entry) => entry.card);
     return [];
-  }, [tab, visibleFilteredSearchResults, commanderEntry, visibleDeckCards, filteredCollection]);
+  }, [previewSource, printings, tab, visibleFilteredSearchResults, commanderEntry, visibleDeckCards, sortedCollection]);
   const previewCardIndex = previewCards.findIndex((card) => card.id === previewCard?.id);
   const touchStartX = useRef<number | null>(null);
 
@@ -465,16 +552,24 @@ function App() {
     if (!previewCard && !printingCard && !pendingDeckCard && !deckNameDialog && !commanderPickerDeckId) return;
 
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (previewCard && event.key === 'Escape') {
         setPreviewCard(null);
+        setPreviewSource(null);
+        return;
+      }
+      if (previewCard && event.key === 'ArrowLeft' && previewCardIndex > 0) {
+        setPreviewCard(previewCards[previewCardIndex - 1]);
+        return;
+      }
+      if (previewCard && event.key === 'ArrowRight' && previewCardIndex >= 0 && previewCardIndex < previewCards.length - 1) {
+        setPreviewCard(previewCards[previewCardIndex + 1]);
+        return;
+      }
+      if (event.key === 'Escape') {
         setPrintingCard(null);
         setPendingDeckCard(null);
         setDeckNameDialog(null);
         setCommanderPickerDeckId(null);
-      } else if (previewCard && event.key === 'ArrowLeft' && previewCardIndex > 0) {
-        setPreviewCard(previewCards[previewCardIndex - 1]);
-      } else if (previewCard && event.key === 'ArrowRight' && previewCardIndex >= 0 && previewCardIndex < previewCards.length - 1) {
-        setPreviewCard(previewCards[previewCardIndex + 1]);
       }
     };
     const previousOverflow = document.body.style.overflow;
@@ -616,6 +711,31 @@ function App() {
     setOpenDeckMenuId(null);
   };
 
+  const openDuplicateDeckDialog = (deck: Deck) => {
+    setDeckNameInput(`${deck.name} (kopio)`);
+    setDeckNameDialog({ mode: 'duplicate', deckId: deck.id });
+    setOpenDeckMenuId(null);
+  };
+
+  const duplicateDeck = async (sourceDeck: Deck, name: string) => {
+    const now = Date.now();
+    const copiedDeck: Deck = {
+      ...sourceDeck,
+      id: crypto.randomUUID(),
+      name,
+      cards: sourceDeck.cards.map((entry) => ({ ...entry })),
+      createdAt: now,
+      updatedAt: now,
+    };
+    await db.decks.put(copiedDeck);
+    setDecks((current) => [copiedDeck, ...current]);
+    setSelectedDeckId(copiedDeck.id);
+    setDeckNameDialog(null);
+    setDeckNameInput('');
+    setStatus(`Pakka "${name}" kopioitu.`);
+    setToast(`Pakka "${name}" kopioitu.`);
+  };
+
   const saveDeckName = async () => {
     const name = deckNameInput.trim();
     if (!name) {
@@ -639,6 +759,16 @@ function App() {
       setDeckNameDialog(null);
       setDeckNameInput('');
       setStatus(`Pakan nimeksi muutettu "${name}". Tallenna muutokset.`);
+    }
+
+    if (deckNameDialog?.mode === 'duplicate') {
+      const deck = decks.find((item) => item.id === deckNameDialog.deckId);
+      if (!deck) {
+        setStatus('Kopioitavaa pakkaa ei löytynyt.');
+        setDeckNameDialog(null);
+        return;
+      }
+      await duplicateDeck(deck, name);
     }
   };
 
@@ -773,7 +903,7 @@ function App() {
         nextCards.splice(existingIndex, 1);
       }
     } else if (count > 0) {
-      nextCards.push({ cardId: card.id, card, count, isSideboard: false });
+      nextCards.push({ cardId: card.id, card, count, addedAt: Date.now(), isSideboard: false });
     }
 
     const updatedDeck = {
@@ -784,7 +914,11 @@ function App() {
         : undefined,
     };
     await updateDeck(updatedDeck);
-    setStatus(`${card.name}: tallentamattomia muutoksia pakassa ${deck.name}.`);
+    const message = count > 0
+      ? `${card.name} lisätty pakkaan ${deck.name}. Muista tallentaa muutokset.`
+      : `${card.name}: tallentamattomia muutoksia pakassa ${deck.name}.`;
+    setStatus(message);
+    if (count > 0) setToast(message);
   };
 
   const chooseDeckForCard = (card: MtgCard) => {
@@ -795,7 +929,7 @@ function App() {
     }
 
     if (decks.length === 1) {
-      void addCardToDeck(card, 1, decks[0].id).then(() => setTab('decks'));
+      void addCardToDeck(card, 1, decks[0].id);
       return;
     }
 
@@ -824,17 +958,32 @@ function App() {
     }
 
     setDirtyCollectionIds((current) => new Set(current).add(card.id));
-    setStatus(`${card.name}: tallentamattomia muutoksia kokoelmassa.`);
+    const message = change > 0
+      ? `${card.name} lisätty kokoelmaan. Muista tallentaa muutokset.`
+      : `${card.name}: tallentamattomia muutoksia kokoelmassa.`;
+    setStatus(message);
+    if (change > 0) setToast(message);
   };
 
   const openPrintings = (card: MtgCard) => {
     setPreviewCard(null);
+    setPreviewSource(null);
     setPrintings([]);
     setSelectedPrinting(card);
     setPrintingsPage(1);
     setPrintingsHasMore(false);
     setPrintingsError(null);
     setPrintingCard(card);
+  };
+
+  const openCardPreview = (card: MtgCard, source: 'printings' | null = null) => {
+    setPreviewSource(source);
+    setPreviewCard(card);
+  };
+
+  const closeCardPreview = () => {
+    setPreviewCard(null);
+    setPreviewSource(null);
   };
 
   const chooseDeckForPrinting = (card: MtgCard) => {
@@ -900,7 +1049,7 @@ function App() {
           count: nextCards[existingIndex].count + entry.count,
         };
       } else {
-        nextCards.push({ cardId: card.id, card, count: entry.count, isSideboard: false });
+        nextCards.push({ cardId: card.id, card, count: entry.count, addedAt: Date.now(), isSideboard: false });
       }
     }
 
@@ -983,7 +1132,17 @@ function App() {
                   : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
               }`}
             >
-              {item.label}
+              <span className="inline-flex items-center gap-2">
+                {item.label}
+                {((item.id === 'decks' && dirtyDeckIds.size > 0)
+                  || (item.id === 'collection' && dirtyCollectionIds.size > 0)) && (
+                  <span
+                    aria-label="Tallentamattomia muutoksia"
+                    title="Tallentamattomia muutoksia"
+                    className="h-2 w-2 rounded-full bg-amber-400"
+                  />
+                )}
+              </span>
             </button>
           ))}
         </div>
@@ -1075,6 +1234,14 @@ function App() {
                           </button>
                           <button
                             type="button"
+                            onClick={() => openDuplicateDeckDialog(deck)}
+                            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-slate-200 hover:bg-slate-800"
+                          >
+                            <Copy size={14} />
+                            Kopioi pakka
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => openRenameDeckDialog(deck)}
                             className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-slate-200 hover:bg-slate-800"
                           >
@@ -1119,6 +1286,10 @@ function App() {
                     searchValue={deckSearch}
                     onSearchChange={setDeckSearch}
                     searchLabel="Hae valitun pakan korteista"
+                    sortKey={deckSortKey}
+                    onSortKeyChange={setDeckSortKey}
+                    sortDirection={deckSortDirection}
+                    onSortDirectionChange={setDeckSortDirection}
                   />
                   <p className="mb-3 text-xs text-slate-400">
                     Näytetään {filteredDeckCards.length + (commanderEntry && !filteredDeckCards.some((entry) => entry.cardId === commanderEntry.cardId) ? 1 : 0)} / {selectedDeck.cards.length} eri korttia
@@ -1127,7 +1298,7 @@ function App() {
                     {selectedDeck.cards.length === 0 && <p className="text-slate-400">Pakka on tyhjä. Hae kortteja ja lisää ne pakkaan.</p>}
                     {selectedDeck.cards.length > 0 && filteredDeckCards.length === 0 && !commanderEntry && (
                       <p className={cardView === 'grid' ? 'col-span-full text-slate-400' : 'text-slate-400'}>
-                        Suodattimilla ei löytynyt kortteja.
+                        Haulla tai suodattimilla ei löytynyt kortteja.
                       </p>
                     )}
                     {deckDisplayItems.map((item) => {
@@ -1161,7 +1332,7 @@ function App() {
                             <>
                               <button
                                 type="button"
-                                onClick={() => setPreviewCard(entry.card)}
+                                onClick={() => openCardPreview(entry.card)}
                                 aria-label={`Näytä ${entry.card.name} isompana`}
                                 className="block w-full overflow-hidden rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400"
                               >
@@ -1282,7 +1453,7 @@ function App() {
                     <div className="mb-3 flex items-center gap-3">
                       <button
                         type="button"
-                        onClick={() => setPreviewCard(card)}
+                        onClick={() => openCardPreview(card)}
                         aria-label={`Näytä ${card.name} isompana`}
                         className="shrink-0 rounded-md focus:outline-none focus:ring-2 focus:ring-violet-400"
                       >
@@ -1472,9 +1643,13 @@ function App() {
               searchValue={collectionSearch}
               onSearchChange={setCollectionSearch}
               searchLabel="Hae kokoelman korteista"
+              sortKey={collectionSortKey}
+              onSortKeyChange={setCollectionSortKey}
+              sortDirection={collectionSortDirection}
+              onSortDirectionChange={setCollectionSortDirection}
             />
             <p className="mb-3 text-xs text-slate-400">
-              Näytetään {filteredCollection.length} / {collection.length} eri korttia
+              Näytetään {sortedCollection.length} / {collection.length} eri korttia
             </p>
             <div className={cardView === 'grid' ? 'grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5' : 'space-y-2'}>
               {collection.length === 0 && (
@@ -1482,12 +1657,12 @@ function App() {
                   Kokoelma on tyhjä. Hae kortteja ja lisää ne kokoelmaan Korttihaku-välilehdeltä.
                 </p>
               )}
-              {collection.length > 0 && filteredCollection.length === 0 && (
+              {collection.length > 0 && sortedCollection.length === 0 && (
                 <p className={cardView === 'grid' ? 'col-span-full text-slate-400' : 'text-slate-400'}>
-                  Suodattimilla ei löytynyt kortteja.
+                  Haulla tai suodattimilla ei löytynyt kortteja.
                 </p>
               )}
-              {filteredCollection.map((entry) => {
+              {sortedCollection.map((entry) => {
                 const imageUrl = getCardImageUrl(entry.card, cardView === 'grid' ? 'normal' : 'small');
                 const stats = entry.card.power !== undefined && entry.card.toughness !== undefined
                   ? `${entry.card.power}/${entry.card.toughness}`
@@ -1507,7 +1682,7 @@ function App() {
                       <>
                         <button
                           type="button"
-                          onClick={() => setPreviewCard(entry.card)}
+                          onClick={() => openCardPreview(entry.card)}
                           aria-label={`Näytä ${entry.card.name} isompana`}
                           className="block w-full overflow-hidden rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400"
                         >
@@ -1719,7 +1894,11 @@ function App() {
             }}
           >
             <h2 id="deck-name-title" className="text-lg font-semibold text-white">
-              {deckNameDialog.mode === 'create' ? 'Luo uusi pakka' : 'Nimeä pakka uudelleen'}
+              {deckNameDialog.mode === 'create'
+                ? 'Luo uusi pakka'
+                : deckNameDialog.mode === 'duplicate'
+                  ? 'Kopioi pakka'
+                  : 'Nimeä pakka uudelleen'}
             </h2>
             <label htmlFor="deck-name-input" className="mt-4 block text-sm text-slate-300">
               Pakan nimi
@@ -1747,8 +1926,16 @@ function App() {
                 disabled={!deckNameInput.trim()}
                 className="inline-flex items-center gap-2 rounded-lg bg-violet-500 px-4 py-2 text-sm font-medium text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {deckNameDialog.mode === 'create' ? <FolderPlus size={16} /> : <Save size={16} />}
-                {deckNameDialog.mode === 'create' ? 'Luo pakka' : 'Tallenna nimi'}
+                {deckNameDialog.mode === 'create'
+                  ? <FolderPlus size={16} />
+                  : deckNameDialog.mode === 'duplicate'
+                    ? <Copy size={16} />
+                    : <Save size={16} />}
+                {deckNameDialog.mode === 'create'
+                  ? 'Luo pakka'
+                  : deckNameDialog.mode === 'duplicate'
+                    ? 'Kopioi pakka'
+                    : 'Tallenna nimi'}
               </button>
             </div>
           </form>
@@ -1791,7 +1978,7 @@ function App() {
                     const card = pendingDeckCard;
                     setPendingDeckCard(null);
                     setSelectedDeckId(deck.id);
-                    void addCardToDeck(card, 1, deck.id).then(() => setTab('decks'));
+                    void addCardToDeck(card, 1, deck.id);
                   }}
                   className="flex w-full items-center justify-between rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-left hover:border-violet-500 hover:bg-violet-500/10"
                 >
@@ -1869,9 +2056,9 @@ function App() {
 
       {previewCard && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
           role="presentation"
-          onClick={() => setPreviewCard(null)}
+          onClick={closeCardPreview}
         >
           <div
             role="dialog"
@@ -1898,7 +2085,7 @@ function App() {
           >
             <button
               type="button"
-              onClick={() => setPreviewCard(null)}
+              onClick={closeCardPreview}
               aria-label="Sulje kortin esikatselu"
               className="absolute -right-2 -top-2 z-10 rounded-full border border-slate-600 bg-slate-900 p-2 text-white shadow-lg hover:bg-slate-800"
             >
@@ -1982,31 +2169,42 @@ function App() {
                   const imageUrl = getCardImageUrl(printing, 'normal') ?? getCardImageUrl(printing, 'small');
                   const isSelected = selectedPrinting?.id === printing.id;
                   return (
-                    <button
+                    <div
                       key={printing.id}
-                      type="button"
-                      onClick={() => setSelectedPrinting(printing)}
-                      aria-pressed={isSelected}
                       className={`rounded-xl border p-2 text-left transition ${
                         isSelected
                           ? 'border-violet-400 bg-violet-500/15 ring-1 ring-violet-400'
                           : 'border-slate-800 bg-slate-950/70 hover:border-slate-600'
                       }`}
                     >
-                      <img
-                        src={imageUrl ?? 'https://placehold.co/488x680/111827/9ca3af?text=No+image'}
-                        alt={`${printing.name}, ${printing.set_name ?? printing.set}`}
-                        loading="lazy"
-                        className="mx-auto aspect-[5/7] w-full rounded-lg object-cover"
-                      />
-                      <span className="mt-2 block truncate text-sm font-medium text-white">
-                        {printing.set_name ?? printing.set.toUpperCase()}
-                      </span>
-                      <span className="block truncate text-xs text-slate-400">
-                        {printing.set.toUpperCase()} · #{printing.collector_number}
-                        {printing.lang ? ` · ${printing.lang.toUpperCase()}` : ''}
-                      </span>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => openCardPreview(printing, 'printings')}
+                        aria-label={`Näytä ${printing.name}, ${printing.set_name ?? printing.set}, isompana`}
+                        className="block w-full overflow-hidden rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400"
+                      >
+                        <img
+                          src={imageUrl ?? 'https://placehold.co/488x680/111827/9ca3af?text=No+image'}
+                          alt={`${printing.name}, ${printing.set_name ?? printing.set}`}
+                          loading="lazy"
+                          className="mx-auto aspect-[5/7] w-full rounded-lg object-cover"
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPrinting(printing)}
+                        aria-pressed={isSelected}
+                        className="mt-2 block w-full text-left"
+                      >
+                        <span className="block truncate text-sm font-medium text-white">
+                          {printing.set_name ?? printing.set.toUpperCase()}
+                        </span>
+                        <span className="block truncate text-xs text-slate-400">
+                          {printing.set.toUpperCase()} · #{printing.collector_number}
+                          {printing.lang ? ` · ${printing.lang.toUpperCase()}` : ''}
+                        </span>
+                      </button>
+                    </div>
                   );
                 })}
               </div>
