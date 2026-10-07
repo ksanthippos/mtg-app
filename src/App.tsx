@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUpDown,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Crown,
@@ -28,10 +29,10 @@ import type { CollectionCard, Deck, DeckCard, MtgCard } from './types';
 import { parseCsvImport, parseDecklistText, type ParsedDeckEntry } from './utils/decklist';
 
 const tabs = [
-  { id: 'decks', label: 'Pakat' },
-  { id: 'collection', label: 'Kokoelma' },
-  { id: 'search', label: 'Korttihaku' },
-  { id: 'import', label: 'Tuo / Vie' },
+  { id: 'decks', label: 'Pakat', icon: Layers },
+  { id: 'collection', label: 'Kokoelma', icon: Library },
+  { id: 'search', label: 'Korttihaku', icon: Search },
+  { id: 'import', label: 'Tuo / Vie', icon: ArrowUpDown },
 ] as const;
 
 function ManaText({ text, symbols }: { text: string; symbols: Map<string, string> }) {
@@ -394,6 +395,7 @@ function App() {
   const [collectionSearch, setCollectionSearch] = useState('');
   const [dirtyDeckIds, setDirtyDeckIds] = useState<Set<string>>(() => new Set());
   const [dirtyCollectionIds, setDirtyCollectionIds] = useState<Set<string>>(() => new Set());
+  const [deckPickerOpen, setDeckPickerOpen] = useState(false);
   const [openDeckMenuId, setOpenDeckMenuId] = useState<string | null>(null);
   const [commanderPickerDeckId, setCommanderPickerDeckId] = useState<string | null>(null);
   const [deckNameDialog, setDeckNameDialog] = useState<
@@ -410,6 +412,7 @@ function App() {
   const [selectedDeckId, setSelectedDeckId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<MtgCard[]>([]);
+  const [selectedSearchFaces, setSelectedSearchFaces] = useState<Record<string, number>>({});
   const [searchTotal, setSearchTotal] = useState(0);
   const [searchPage, setSearchPage] = useState(1);
   const [searchHasMore, setSearchHasMore] = useState(false);
@@ -430,7 +433,6 @@ function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [pendingDeckCard, setPendingDeckCard] = useState<MtgCard | null>(null);
   const [importText, setImportText] = useState('');
-  const [previewEntries, setPreviewEntries] = useState<ParsedDeckEntry[]>([]);
 
   const selectedDeck = decks.find((deck) => deck.id === selectedDeckId) ?? null;
   const commanderPickerDeck = decks.find((deck) => deck.id === commanderPickerDeckId) ?? null;
@@ -498,6 +500,7 @@ function App() {
     () => sortCardEntries(filteredCollection, collectionSortKey, collectionSortDirection),
     [filteredCollection, collectionSortKey, collectionSortDirection],
   );
+  const importEntries = useMemo(() => parseDecklistText(importText), [importText]);
   const filteredSearchResults = useMemo(
     () => searchResults.filter((card) => matchesCardFilters(card, searchFilters)),
     [searchResults, searchFilters],
@@ -508,11 +511,16 @@ function App() {
   );
   const previewCards = useMemo(() => {
     if (previewSource === 'printings') return printings;
-    if (tab === 'search') return visibleFilteredSearchResults;
+    if (tab === 'search') {
+      return visibleFilteredSearchResults.map((card) => ({
+        ...card,
+        selected_face_index: selectedSearchFaces[card.id] ?? 0,
+      }));
+    }
     if (tab === 'decks') return [...(commanderEntry ? [commanderEntry] : []), ...visibleDeckCards].map((entry) => entry.card);
     if (tab === 'collection') return sortedCollection.map((entry) => entry.card);
     return [];
-  }, [previewSource, printings, tab, visibleFilteredSearchResults, commanderEntry, visibleDeckCards, sortedCollection]);
+  }, [previewSource, printings, tab, visibleFilteredSearchResults, selectedSearchFaces, commanderEntry, visibleDeckCards, sortedCollection]);
   const previewCardIndex = previewCards.findIndex((card) => card.id === previewCard?.id);
   const touchStartX = useRef<number | null>(null);
 
@@ -525,6 +533,7 @@ function App() {
   const refreshDecks = async () => {
     const items = await db.decks.orderBy('updatedAt').reverse().toArray();
     setDecks(items);
+    if (items.length === 0) setDeckPickerOpen(true);
     if (!selectedDeckId && items.length > 0) {
       setSelectedDeckId(items[0].id);
     }
@@ -613,6 +622,7 @@ function App() {
     let cancelled = false;
     const trimmed = searchTerm.trim();
     setSearchResults([]);
+    setSelectedSearchFaces({});
     setSearchTotal(0);
     setSearchPage(1);
     setSearchHasMore(false);
@@ -693,6 +703,7 @@ function App() {
 
     await db.decks.put(deck);
     setSelectedDeckId(deck.id);
+    setDeckPickerOpen(false);
     setDecks((current) => [deck, ...current]);
     setDeckNameDialog(null);
     setDeckNameInput('');
@@ -730,6 +741,7 @@ function App() {
     await db.decks.put(copiedDeck);
     setDecks((current) => [copiedDeck, ...current]);
     setSelectedDeckId(copiedDeck.id);
+    setDeckPickerOpen(false);
     setDeckNameDialog(null);
     setDeckNameInput('');
     setStatus(`Pakka "${name}" kopioitu.`);
@@ -897,6 +909,7 @@ function App() {
     if (existingIndex >= 0) {
       nextCards[existingIndex] = {
         ...nextCards[existingIndex],
+        card,
         count: Math.max(0, nextCards[existingIndex].count + count),
       };
       if (nextCards[existingIndex].count === 0) {
@@ -1003,6 +1016,7 @@ function App() {
     setDecks(remainingDecks);
     if (selectedDeckId === deckId) {
       setSelectedDeckId(remainingDecks[0]?.id ?? null);
+      if (remainingDecks.length === 0) setDeckPickerOpen(true);
     }
     setDirtyDeckIds((current) => {
       const next = new Set(current);
@@ -1011,12 +1025,6 @@ function App() {
     });
     setOpenDeckMenuId(null);
     setStatus('Pakka poistettu');
-  };
-
-  const handleImportPreview = (text: string, kind: 'decklist' | 'csv') => {
-    const parsed = kind === 'decklist' ? parseDecklistText(text) : parseCsvImport(text);
-    setPreviewEntries(parsed);
-    setStatus(`${parsed.length} korttia esikatselussa`);
   };
 
   const applyImportedEntries = async (entries: ParsedDeckEntry[]) => {
@@ -1063,7 +1071,7 @@ function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'mtg-vault-export.json';
+    link.download = 'ez-mtg-export.json';
     link.click();
     URL.revokeObjectURL(url);
     setStatus('Vienti valmis');
@@ -1093,7 +1101,6 @@ function App() {
         setToast('Tuonti onnistui.');
       } else {
         const parsed = file.name.toLowerCase().endsWith('.csv') ? parseCsvImport(raw) : parseDecklistText(raw);
-        setPreviewEntries(parsed);
         if (parsed.length) {
           await applyImportedEntries(parsed);
         } else {
@@ -1113,14 +1120,14 @@ function App() {
       <header className="border-b border-slate-800 bg-[#0f1117] sticky top-0 z-20 backdrop-blur-sm">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.25em] text-violet-400">EZ MTG</p>
-            <h1 className="text-xl font-semibold text-white">MTG - apulainen</h1>
+            <p className="text-[10px] uppercase tracking-[0.25em] text-violet-400">pakanrakentajan kaveri</p>
+            <h1 className="text-xl font-semibold text-violet-400">EZ MTG</h1>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
-        <div className="mb-6 flex flex-wrap gap-2 rounded-xl border border-slate-800 bg-[#121722] p-2">
+      <main className="mx-auto max-w-6xl px-4 py-6 pb-28 sm:px-6 lg:pb-6">
+        <div className="mb-6 hidden flex-wrap gap-2 rounded-xl border border-slate-800 bg-[#121722] p-2 lg:flex">
           {tabs.map((item) => (
             <button
               key={item.id}
@@ -1148,46 +1155,80 @@ function App() {
         </div>
 
         {tab === 'decks' && (
-          <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
+          <div className="space-y-4">
             <aside className="rounded-2xl border border-slate-800 bg-[#10141d] p-3">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Pakat</h2>
-                  <span className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-300">{decks.length}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void handleSaveDeckChanges()}
-                  disabled={dirtyDeckIds.size === 0}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <Save size={14} />
-                  Tallenna{dirtyDeckIds.size > 0 ? ` (${dirtyDeckIds.size})` : ''}
-                </button>
-                {dirtyDeckIds.size > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => void cancelDeckChanges()}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800"
-                  >
-                    <X size={14} />
-                    Peruuta
-                  </button>
-                )}
-              </div>
-
               <button
                 type="button"
-                onClick={openCreateDeckDialog}
-                className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-sm font-medium text-white shadow-lg shadow-violet-500/20 transition hover:bg-violet-400"
+                onClick={() => setDeckPickerOpen((open) => !open)}
+                aria-expanded={deckPickerOpen}
+                aria-controls="deck-picker-panel"
+                className="flex w-full items-center justify-between gap-3 rounded-xl px-2 py-2 text-left hover:bg-slate-900/70"
               >
-                <FolderPlus size={16} />
-                Uusi pakka
+                <span className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-300">
+                    <Layers size={18} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate font-semibold text-white">{selectedDeck?.name ?? 'Valitse pakka'}</span>
+                      {dirtyDeckIds.size > 0 && (
+                        <span
+                          aria-label="Tallentamattomia muutoksia"
+                          title="Tallentamattomia muutoksia"
+                          className="h-2 w-2 shrink-0 rounded-full bg-amber-400"
+                        />
+                      )}
+                    </span>
+                    <span className="block text-xs text-slate-400">
+                      {decks.length} pakkaa{selectedDeck ? ` · ${deckTotal} korttia` : ''}
+                    </span>
+                  </span>
+                </span>
+                <ChevronDown
+                  size={18}
+                  className={`shrink-0 text-slate-400 transition-transform ${deckPickerOpen ? 'rotate-180' : ''}`}
+                />
               </button>
 
-              <div className="space-y-2">
-                {decks.length === 0 && <p className="text-sm text-slate-400">Ei pakkoja vielä.</p>}
-                {decks.map((deck) => (
+              {deckPickerOpen && (
+                <div id="deck-picker-panel" className="mt-3 border-t border-slate-800 pt-3">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Pakat</h2>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveDeckChanges()}
+                        disabled={dirtyDeckIds.size === 0}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Save size={14} />
+                        Tallenna{dirtyDeckIds.size > 0 ? ` (${dirtyDeckIds.size})` : ''}
+                      </button>
+                      {dirtyDeckIds.size > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => void cancelDeckChanges()}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                        >
+                          <X size={14} />
+                          Peruuta
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={openCreateDeckDialog}
+                    className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-sm font-medium text-white shadow-lg shadow-violet-500/20 transition hover:bg-violet-400"
+                  >
+                    <FolderPlus size={16} />
+                    Uusi pakka
+                  </button>
+
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {decks.length === 0 && <p className="text-sm text-slate-400">Ei pakkoja vielä.</p>}
+                    {decks.map((deck) => (
                   <div
                     key={deck.id}
                     className={`flex items-center justify-between rounded-xl border px-3 py-2 text-left transition ${
@@ -1198,7 +1239,11 @@ function App() {
                   >
                     <button
                       type="button"
-                      onClick={() => setSelectedDeckId(deck.id)}
+                      onClick={() => {
+                        setSelectedDeckId(deck.id);
+                        setDeckPickerOpen(false);
+                        setOpenDeckMenuId(null);
+                      }}
                       className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
                     >
                       <div>
@@ -1261,7 +1306,9 @@ function App() {
                     </div>
                   </div>
                 ))}
-              </div>
+                  </div>
+                </div>
+              )}
             </aside>
 
             <section className="rounded-2xl border border-slate-800 bg-[#111827] p-4">
@@ -1447,13 +1494,15 @@ function App() {
                 <p className="col-span-full text-slate-400">Suodattimilla ei löytynyt kortteja.</p>
               )}
               {visibleFilteredSearchResults.map((card) => {
-                const imageUrl = getCardImageUrl(card, 'small');
+                const selectedFaceIndex = selectedSearchFaces[card.id] ?? 0;
+                const cardWithSelectedFace = { ...card, selected_face_index: selectedFaceIndex };
+                const imageUrl = getCardImageUrl(cardWithSelectedFace, 'small');
                 return (
                   <div key={card.id} className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
                     <div className="mb-3 flex items-center gap-3">
                       <button
                         type="button"
-                        onClick={() => openCardPreview(card)}
+                        onClick={() => openCardPreview(cardWithSelectedFace)}
                         aria-label={`Näytä ${card.name} isompana`}
                         className="shrink-0 rounded-md focus:outline-none focus:ring-2 focus:ring-violet-400"
                       >
@@ -1469,6 +1518,25 @@ function App() {
                         <div className="text-xs text-slate-400">{card.set.toUpperCase()} · #{card.collector_number} · {card.rarity}</div>
                       </div>
                     </div>
+                    {card.card_faces && card.card_faces.length > 1 && (
+                      <div className="mb-3 flex flex-wrap gap-2" aria-label={`${card.name} facen valinta`}>
+                        {card.card_faces.map((face, index) => (
+                          <button
+                            key={`${face.name}-${index}`}
+                            type="button"
+                            onClick={() => setSelectedSearchFaces((current) => ({ ...current, [card.id]: index }))}
+                            aria-pressed={selectedFaceIndex === index}
+                            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                              selectedFaceIndex === index
+                                ? 'border-violet-400 bg-violet-500/15 text-violet-100'
+                                : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500'
+                            }`}
+                          >
+                            {face.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <div className="mb-3 rounded-lg border border-slate-800 bg-[#111722] p-3">
                       {card.card_faces?.length ? (
                         <div className="space-y-3">
@@ -1559,7 +1627,7 @@ function App() {
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                       <button
                         type="button"
-                        onClick={() => chooseDeckForCard(card)}
+                        onClick={() => chooseDeckForCard(cardWithSelectedFace)}
                         className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-sm font-medium text-white hover:bg-violet-400"
                       >
                         <Plus size={14} />
@@ -1567,7 +1635,7 @@ function App() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => void updateCollectionCard(card, 1)}
+                        onClick={() => void updateCollectionCard(cardWithSelectedFace, 1)}
                         className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
                       >
                         <Library size={14} />
@@ -1776,41 +1844,28 @@ function App() {
         {tab === 'import' && (
           <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
             <div className="rounded-2xl border border-slate-800 bg-[#10141d] p-4">
-              <h2 className="mb-3 text-lg font-semibold text-white">ManaBox tuonti</h2>
+              <h2 className="mb-3 text-lg font-semibold text-white">Korttien tuonti ja vienti</h2>
               <textarea
                 value={importText}
-                onChange={(event) => {
-                  setImportText(event.target.value);
-                  if (event.target.value.trim()) {
-                    handleImportPreview(event.target.value, 'decklist');
-                  }
-                }}
+                onChange={(event) => setImportText(event.target.value)}
                 placeholder={'4 Lightning Bolt (M25) 141\n2 Counterspell\nSideboard\n2 Pyroblast'}
                 className="min-h-[220px] w-full rounded-xl border border-slate-700 bg-slate-950/80 p-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-500 focus:outline-none"
               />
-              <div className="mt-3 flex flex-wrap gap-3">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => handleImportPreview(importText, 'decklist')}
-                  className="inline-flex items-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-sm font-medium text-white hover:bg-violet-400"
-                >
-                  <ArrowUpDown size={16} />
-                  Esikatsele
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void applyImportedEntries(previewEntries)}
+                  onClick={() => void applyImportedEntries(importEntries)}
                   className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
                 >
-                  <Upload size={16} />
+                  <Layers size={16} />
                   Lisää pakkaan
                 </button>
                 <button
                   type="button"
                   onClick={async () => {
-                    const result = await fetchCardsBatch(previewEntries.map((entry) => ({ name: entry.name })));
+                    const result = await fetchCardsBatch(importEntries.map((entry) => ({ name: entry.name })));
                     const cardsByName = new Map(result.found.map((card) => [card.name.toLowerCase(), card]));
-                    for (const entry of previewEntries) {
+                    for (const entry of importEntries) {
                       const card = cardsByName.get(entry.name.toLowerCase());
                       if (card) await updateCollectionCard(card, entry.count);
                     }
@@ -1820,46 +1875,62 @@ function App() {
                   <Library size={16} />
                   Lisää kokoelmaan
                 </button>
-              </div>
-
-              <div className="mt-4">
                 <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">
                   <Upload size={16} />
-                  CSV / JSON tiedosto
+                  Tuo CSV / JSON
                   <input type="file" accept=".csv,.json,.txt" className="hidden" onChange={handleFileImport} />
                 </label>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-800 bg-[#10141d] p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-white">Esikatselu</h2>
                 <button
                   type="button"
-                  onClick={handleExport}
+                  onClick={() => void handleExport()}
                   className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
                 >
                   <Download size={16} />
                   Vie JSON
                 </button>
               </div>
-
-              <div className="max-h-[420px] space-y-2 overflow-auto rounded-xl bg-slate-950/80 p-3">
-                {previewEntries.length === 0 ? (
-                  <p className="text-sm text-slate-400">Ei esikatseltavia kortteja.</p>
-                ) : (
-                  previewEntries.map((entry, index) => (
-                    <div key={`${entry.name}-${index}`} className="flex items-center justify-between rounded-lg border border-slate-800 px-2 py-2 text-sm">
-                      <span className="text-slate-200">{entry.name}</span>
-                      <span className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-300">x{entry.count}</span>
-                    </div>
-                  ))
-                )}
-              </div>
             </div>
           </section>
         )}
       </main>
+
+      <nav
+        aria-label="Päänavigaatio"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-700 bg-[#10141d]/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_rgba(0,0,0,0.3)] backdrop-blur-lg lg:hidden"
+      >
+        <div className="mx-auto grid max-w-xl grid-cols-4">
+          {tabs.map((item) => {
+            const Icon = item.icon;
+            const hasUnsavedChanges = (item.id === 'decks' && dirtyDeckIds.size > 0)
+              || (item.id === 'collection' && dirtyCollectionIds.size > 0);
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => void navigateToTab(item.id)}
+                aria-current={tab === item.id ? 'page' : undefined}
+                aria-label={item.label}
+                className={`relative flex min-h-16 flex-col items-center justify-center gap-1 px-1 py-2 text-xs font-medium transition ${
+                  tab === item.id ? 'text-violet-300' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <span className={`relative flex h-8 w-12 items-center justify-center rounded-full ${
+                  tab === item.id ? 'bg-violet-500/15' : ''
+                }`}>
+                  <Icon size={21} strokeWidth={tab === item.id ? 2.4 : 1.8} />
+                  {hasUnsavedChanges && (
+                    <span
+                      aria-label="Tallentamattomia muutoksia"
+                      className="absolute right-2 top-0 h-2 w-2 rounded-full bg-amber-400 ring-2 ring-[#10141d]"
+                    />
+                  )}
+                </span>
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
 
       <div className="border-t border-slate-800 bg-[#0d1017] px-4 py-3 text-center text-xs text-slate-400">
         {status}
@@ -1978,6 +2049,7 @@ function App() {
                     const card = pendingDeckCard;
                     setPendingDeckCard(null);
                     setSelectedDeckId(deck.id);
+                    setDeckPickerOpen(false);
                     void addCardToDeck(card, 1, deck.id);
                   }}
                   className="flex w-full items-center justify-between rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-left hover:border-violet-500 hover:bg-violet-500/10"

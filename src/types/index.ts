@@ -1,6 +1,7 @@
 export interface MtgCard {
   id: string; // Scryfall ID
   name: string;
+  selected_face_index?: number;
   mana_cost?: string;
   cmc?: number;
   type_line: string;

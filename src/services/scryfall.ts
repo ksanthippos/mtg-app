@@ -95,6 +95,10 @@ export async function searchCardPrintings(
 }
 
 export function getCardImageUrl(card: MtgCard, size: 'small' | 'normal' | 'large' | 'art_crop' = 'normal'): string | undefined {
+  const selectedFace = card.card_faces?.[card.selected_face_index ?? 0];
+  if (selectedFace?.image_uris?.[size]) {
+    return selectedFace.image_uris[size];
+  }
   if (card.image_uris?.[size]) {
     return card.image_uris[size];
   }

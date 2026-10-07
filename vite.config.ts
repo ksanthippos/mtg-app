@@ -11,18 +11,19 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['mtg-vault.svg'],
+      includeAssets: ['ez-mtg.svg'],
       manifest: {
-        name: 'MTG Vault',
-        short_name: 'MTGVault',
-        description: 'Magic the Gathering Deck Builder & Card Manager',
+        name: 'EZ MTG',
+        short_name: 'EZ MTG',
+        description: 'Yksinkertainen Magic: The Gathering -pakka- ja kokoelma-apuri.',
+        lang: 'fi',
         theme_color: '#090a0f',
         background_color: '#090a0f',
         display: 'standalone',
         orientation: 'portrait',
         icons: [
           {
-            src: 'mtg-vault.svg',
+            src: 'ez-mtg.svg',
             sizes: 'any',
             type: 'image/svg+xml'
           }
