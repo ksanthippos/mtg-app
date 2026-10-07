@@ -35,6 +35,15 @@ const tabs = [
   { id: 'import', label: 'Tuo / Vie', icon: ArrowUpDown },
 ] as const;
 
+function readCardViewPreference(): 'list' | 'grid' {
+  try {
+    return window.localStorage.getItem('ez-mtg-card-view') === 'grid' ? 'grid' : 'list';
+  } catch (error) {
+    console.error('Korttinäkymän asetusta ei voitu lukea:', error);
+    return 'list';
+  }
+}
+
 function ManaText({ text, symbols }: { text: string; symbols: Map<string, string> }) {
   return text.split(/(\{[^}]+\})/g).map((part, index) => {
     const imageUrl = symbols.get(part);
@@ -387,7 +396,7 @@ function App() {
   const [tab, setTab] = useState<(typeof tabs)[number]['id']>('decks');
   const [decks, setDecks] = useState<Deck[]>([]);
   const [collection, setCollection] = useState<CollectionCard[]>([]);
-  const [cardView, setCardView] = useState<'list' | 'grid'>('list');
+  const [cardView, setCardView] = useState<'list' | 'grid'>(readCardViewPreference);
   const [deckFilters, setDeckFilters] = useState<CardFilters>(emptyCardFilters);
   const [collectionFilters, setCollectionFilters] = useState<CardFilters>(emptyCardFilters);
   const [searchFilters, setSearchFilters] = useState<CardFilters>(emptyCardFilters);
@@ -433,6 +442,7 @@ function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [pendingDeckCard, setPendingDeckCard] = useState<MtgCard | null>(null);
   const [importText, setImportText] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const selectedDeck = decks.find((deck) => deck.id === selectedDeckId) ?? null;
   const commanderPickerDeck = decks.find((deck) => deck.id === commanderPickerDeckId) ?? null;
@@ -529,6 +539,18 @@ function App() {
     const timeout = window.setTimeout(() => setToast(null), 3000);
     return () => window.clearTimeout(timeout);
   }, [toast]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('ez-mtg-card-view', cardView);
+    } catch (error) {
+      console.error('Korttinäkymän asetusta ei voitu tallentaa:', error);
+    }
+  }, [cardView]);
+
+  useEffect(() => {
+    if (tab === 'search') searchInputRef.current?.focus();
+  }, [tab]);
 
   const refreshDecks = async () => {
     const items = await db.decks.orderBy('updatedAt').reverse().toArray();
@@ -1416,7 +1438,12 @@ function App() {
                             </>
                           ) : (
                             <>
-                              <div className="min-w-0 flex-1">
+                              <button
+                                type="button"
+                                onClick={() => openCardPreview(entry.card)}
+                                aria-label={`Näytä ${entry.card.name} isompana`}
+                                className="min-w-0 flex-1 rounded text-left focus:outline-none focus:ring-2 focus:ring-violet-400"
+                              >
                                 <div className="flex flex-wrap items-center gap-2">
                                   <span className="font-medium text-white">{entry.card.name}</span>
                                   <CardManaCost card={entry.card} symbols={symbolUris} />
@@ -1425,7 +1452,7 @@ function App() {
                                 <div className="mt-1 text-xs text-slate-400">
                                   {entry.card.type_line} · {entry.card.set.toUpperCase()} #{entry.card.collector_number}
                                 </div>
-                              </div>
+                              </button>
                               <div className="flex items-center gap-2">
                                 <button
                                   type="button"
@@ -1464,6 +1491,7 @@ function App() {
             <div className="mb-4 flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-950/80 px-3 py-3">
               <Search size={18} className="text-slate-400" />
               <input
+                ref={searchInputRef}
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
                 placeholder="Hae korttia, esim. Lightning Bolt..."
@@ -1795,7 +1823,12 @@ function App() {
                       </>
                     ) : (
                       <>
-                        <div className="min-w-0 flex-1">
+                        <button
+                          type="button"
+                          onClick={() => openCardPreview(entry.card)}
+                          aria-label={`Näytä ${entry.card.name} isompana`}
+                          className="min-w-0 flex-1 rounded text-left focus:outline-none focus:ring-2 focus:ring-violet-400"
+                        >
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="font-medium text-white">{entry.card.name}</span>
                             <CardManaCost card={entry.card} symbols={symbolUris} />
@@ -1804,7 +1837,7 @@ function App() {
                           <div className="mt-1 text-xs text-slate-400">
                             {entry.card.type_line} · {entry.card.set.toUpperCase()} #{entry.card.collector_number}
                           </div>
-                        </div>
+                        </button>
                         <div className="flex flex-wrap items-center justify-end gap-2">
                           <button
                             type="button"
@@ -2251,7 +2284,10 @@ function App() {
                     >
                       <button
                         type="button"
-                        onClick={() => openCardPreview(printing, 'printings')}
+                        onClick={() => {
+                          setSelectedPrinting(printing);
+                          openCardPreview(printing, 'printings');
+                        }}
                         aria-label={`Näytä ${printing.name}, ${printing.set_name ?? printing.set}, isompana`}
                         className="block w-full overflow-hidden rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400"
                       >
