@@ -27,6 +27,9 @@ export function sanitizeScryfallCard(raw: any): MtgCard {
     toughness: raw.toughness,
     loyalty: raw.loyalty,
     defense: raw.defense,
+    flavor_text: raw.flavor_text,
+    artist: raw.artist,
+    released_at: raw.released_at,
     colors: raw.colors,
     color_identity: raw.color_identity,
     keywords: raw.keywords,
@@ -36,6 +39,7 @@ export function sanitizeScryfallCard(raw: any): MtgCard {
     rarity: raw.rarity,
     lang: raw.lang,
     prints_search_uri: raw.prints_search_uri,
+    rulings_uri: raw.rulings_uri,
     image_uris: raw.image_uris ? {
       small: raw.image_uris.small,
       normal: raw.image_uris.normal,
@@ -61,6 +65,23 @@ export function sanitizeScryfallCard(raw: any): MtgCard {
     scryfall_uri: raw.scryfall_uri,
     cached_at: Date.now(),
   };
+}
+
+export interface CardRuling {
+  source: string;
+  published_at: string;
+  comment: string;
+}
+
+export async function fetchCardRulings(card: MtgCard): Promise<CardRuling[]> {
+  const url = card.rulings_uri ?? `${SCRYFALL_API}/cards/${encodeURIComponent(card.id)}/rulings`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Kortin sääntöhuomioiden haku epäonnistui: ${response.status} ${response.statusText}`);
+  }
+
+  const result: { data?: CardRuling[] } = await response.json();
+  return result.data ?? [];
 }
 
 export async function searchCardPrintings(

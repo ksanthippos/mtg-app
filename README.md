@@ -1,6 +1,8 @@
 # EZ MTG
 
-Local-first Magic: The Gathering deck and collection manager built with React, Vite, IndexedDB, and the Scryfall API.
+Local-first Magic: The Gathering deck, collection, and wishlist manager built with React, Vite, IndexedDB, and the Scryfall API.
+
+Decks, collection cards, and wishlist entries are stored in the browser on each device. JSON export/import includes all three, so it can be used to transfer data between devices. Individual decks and the collection can also be exported as CSV or JSON. Older exports without a wishlist remain importable.
 
 ## Development
 

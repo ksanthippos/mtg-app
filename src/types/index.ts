@@ -13,12 +13,16 @@ export interface MtgCard {
   colors?: string[];
   color_identity?: string[];
   keywords?: string[];
+  flavor_text?: string;
+  artist?: string;
+  released_at?: string;
   set: string;
   set_name?: string;
   collector_number: string;
   rarity: string;
   lang?: string;
   prints_search_uri?: string;
+  rulings_uri?: string;
   image_uris?: {
     small?: string;
     normal?: string;
@@ -56,6 +60,7 @@ export interface DeckCard {
 export interface Deck {
   id: string;
   name: string;
+  active?: boolean;
   commanderCardId?: string;
   format?: string;
   description?: string;
@@ -72,9 +77,16 @@ export interface CollectionCard {
   addedAt: number;
 }
 
+export interface WishlistCard {
+  id: string;
+  card: MtgCard;
+  addedAt: number;
+}
+
 export interface ExportData {
-  version: 1;
+  version: 1 | 2;
   exportedAt: number;
   decks: Deck[];
   collection: CollectionCard[];
+  wishlist?: WishlistCard[];
 }

@@ -51,7 +51,24 @@ export function parseCsvImport(rawText: string): ParsedDeckEntry[] {
   const parsed: ParsedDeckEntry[] = [];
 
   for (const line of lines) {
-    const cells = line.split(',').map((cell) => cell.trim().replace(/^"|"$/g, ''));
+    const cells: string[] = [];
+    let cell = '';
+    let quoted = false;
+    for (let index = 0; index < line.length; index++) {
+      const character = line[index];
+      if (character === '"' && quoted && line[index + 1] === '"') {
+        cell += '"';
+        index++;
+      } else if (character === '"') {
+        quoted = !quoted;
+      } else if (character === ',' && !quoted) {
+        cells.push(cell.trim());
+        cell = '';
+      } else {
+        cell += character;
+      }
+    }
+    cells.push(cell.trim());
     if (cells.length < 2) continue;
 
     const first = cells[0];
