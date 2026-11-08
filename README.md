@@ -1,4 +1,4 @@
-# EZ MTG
+# MTG - apuri
 
 Local-first Magic: The Gathering deck, collection, and wishlist manager built with React, Vite, IndexedDB, and the Scryfall API.
 

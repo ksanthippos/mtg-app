@@ -13,8 +13,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['ez-mtg.svg'],
       manifest: {
-        name: 'EZ MTG',
-        short_name: 'EZ MTG',
+        name: 'MTG - apuri',
+        short_name: 'MTG - apuri',
         description: 'Yksinkertainen Magic: The Gathering -pakka- ja kokoelma-apuri.',
         lang: 'fi',
         theme_color: '#090a0f',

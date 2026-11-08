@@ -47,10 +47,12 @@ import {
   parseDecklistText,
   type ParsedDeckEntry,
 } from './utils/decklist';
+import { config } from './config.js';
 import { ManaCurve } from './components/ManaCurve';
 import { SampleHandModal } from './components/SampleHandModal';
 import { CardInfoModal } from './components/CardInfoModal';
 import { PrintingsModal } from './components/PrintingsModal';
+import { CollectionImportModal } from './components/CollectionImportModal';
 
 const tabs = [
   { id: 'decks', label: 'Pakat', icon: Layers },
@@ -62,7 +64,7 @@ const tabs = [
 
 function readCardViewPreference(): 'list' | 'grid' {
   try {
-    return window.localStorage.getItem('ez-mtg-card-view') === 'grid' ? 'grid' : 'list';
+    return (window.localStorage.getItem('mtg-apuri-card-view') || window.localStorage.getItem('ez-mtg-card-view')) === 'grid' ? 'grid' : 'list';
   } catch (error) {
     console.error('Korttinäkymän asetusta ei voitu lukea:', error);
     return 'list';
@@ -564,6 +566,12 @@ function App() {
   const [searchSuggestions, setSearchSuggestions] = useState<string[]>([]);
   const [showSearchSuggestions, setShowSearchSuggestions] = useState(false);
   const [autoSaveEnabled] = useState(true);
+  const [collectionImportPending, setCollectionImportPending] = useState<{
+    entries: ParsedDeckEntry[];
+    fileName: string;
+  } | null>(null);
+  const [collectionImportLoading, setCollectionImportLoading] = useState(false);
+  const [collectionImportProgress, setCollectionImportProgress] = useState<{ current: number; total: number } | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const selectedDeck = decks.find((deck) => deck.id === selectedDeckId) ?? null;
@@ -752,7 +760,7 @@ function App() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem('ez-mtg-card-view', cardView);
+      window.localStorage.setItem('mtg-apuri-card-view', cardView);
     } catch (error) {
       console.error('Korttinäkymän asetusta ei voitu tallentaa:', error);
     }
@@ -1565,7 +1573,7 @@ function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `ez-mtg-${scope === 'deck' ? (deck?.name ?? 'pakka').toLowerCase().replace(/[^a-z0-9-]+/g, '-') : scope}-${now}.${extension}`;
+    link.download = `mtg-apuri-${scope === 'deck' ? (deck?.name ?? 'pakka').toLowerCase().replace(/[^a-z0-9-]+/g, '-') : scope}-${now}.${extension}`;
     link.click();
     URL.revokeObjectURL(url);
     setExportDeckMenuOpen(false);
@@ -1613,6 +1621,162 @@ function App() {
       setStatus('Tiedoston import epäonnistui');
     } finally {
       event.target.value = '';
+    }
+  };
+
+  const handleCollectionFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const parsed = file.name.toLowerCase().endsWith('.csv')
+        ? parseCsvImport(text)
+        : parseDecklistText(text);
+
+      if (parsed.length === 0) {
+        setStatus('Tiedostosta ei löytynyt kortteja tuotavaksi.');
+        setToast('Tiedostosta ei löytynyt kortteja.');
+        return;
+      }
+
+      setCollectionImportPending({
+        entries: parsed,
+        fileName: file.name,
+      });
+    } catch (err) {
+      console.error('Kokoelmatiedoston luku epäonnistui:', err);
+      setStatus('Kokoelmatiedoston luku epäonnistui.');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const executeCollectionImport = async (mode: 'sync' | 'add' | 'replace') => {
+    if (!collectionImportPending) return;
+    const { entries } = collectionImportPending;
+
+    setCollectionImportLoading(true);
+    setCollectionImportProgress({ current: 0, total: entries.length });
+
+    try {
+      const chunkSize = 75;
+      const allFound: MtgCard[] = [];
+
+      for (let i = 0; i < entries.length; i += chunkSize) {
+        const chunk = entries.slice(i, i + chunkSize);
+        const identifiers = chunk.map((e) => {
+          if (e.scryfall_id) return { id: e.scryfall_id };
+          if (e.set && e.collector_number) return { set: e.set, collector_number: e.collector_number };
+          return { name: e.name };
+        });
+
+        const { found } = await fetchCardsBatch(identifiers);
+        allFound.push(...found);
+        setCollectionImportProgress({ current: Math.min(i + chunkSize, entries.length), total: entries.length });
+      }
+
+      const cardsById = new Map<string, MtgCard>();
+      const cardsBySetNumber = new Map<string, MtgCard>();
+      const cardsByName = new Map<string, MtgCard>();
+
+      for (const card of allFound) {
+        cardsById.set(card.id, card);
+        cardsBySetNumber.set(`${card.set.toLowerCase()}:${card.collector_number.toLowerCase()}`, card);
+        cardsByName.set(card.name.toLowerCase(), card);
+      }
+
+      const targetCardMap = new Map<string, { card: MtgCard; count: number }>();
+
+      for (const entry of entries) {
+        let matchedCard: MtgCard | undefined;
+        if (entry.scryfall_id) {
+          matchedCard = cardsById.get(entry.scryfall_id);
+        }
+        if (!matchedCard && entry.set && entry.collector_number) {
+          matchedCard = cardsBySetNumber.get(`${entry.set.toLowerCase()}:${entry.collector_number.toLowerCase()}`);
+        }
+        if (!matchedCard) {
+          matchedCard = cardsByName.get(entry.name.toLowerCase());
+        }
+        if (!matchedCard) continue;
+
+        const current = targetCardMap.get(matchedCard.id);
+        targetCardMap.set(matchedCard.id, {
+          card: matchedCard,
+          count: (current?.count ?? 0) + entry.count,
+        });
+      }
+
+      const currentCollectionMap = new Map<string, CollectionCard>(collection.map((item) => [item.id, item]));
+      let addedCount = 0;
+      let updatedCount = 0;
+
+      if (mode === 'replace') {
+        await db.collection.clear();
+        currentCollectionMap.clear();
+      }
+
+      const now = Date.now();
+      const nextCollection: CollectionCard[] = [];
+
+      if (mode === 'replace') {
+        for (const [id, { card, count }] of targetCardMap.entries()) {
+          nextCollection.push({ id, card, count, addedAt: now });
+          addedCount++;
+        }
+      } else if (mode === 'sync') {
+        for (const [id, item] of currentCollectionMap.entries()) {
+          const imported = targetCardMap.get(id);
+          if (imported) {
+            if (item.count !== imported.count) updatedCount++;
+            nextCollection.push({ ...item, count: imported.count });
+            targetCardMap.delete(id);
+          } else {
+            nextCollection.push(item);
+          }
+        }
+        for (const [id, { card, count }] of targetCardMap.entries()) {
+          nextCollection.push({ id, card, count, addedAt: now });
+          addedCount++;
+        }
+      } else {
+        // 'add'
+        for (const [id, item] of currentCollectionMap.entries()) {
+          const imported = targetCardMap.get(id);
+          if (imported) {
+            updatedCount++;
+            nextCollection.push({ ...item, count: item.count + imported.count });
+            targetCardMap.delete(id);
+          } else {
+            nextCollection.push(item);
+          }
+        }
+        for (const [id, { card, count }] of targetCardMap.entries()) {
+          nextCollection.push({ id, card, count, addedAt: now });
+          addedCount++;
+        }
+      }
+
+      await db.collection.bulkPut(nextCollection);
+      for (const item of nextCollection) {
+        await db.cardCache.put({ ...item.card, cached_at: now }).catch(() => {});
+      }
+
+      setCollection(nextCollection);
+      setDirtyCollectionIds(new Set());
+      setCollectionImportPending(null);
+
+      const summaryMessage = `Kokoelma päivitetty! Lisättiin ${addedCount} uutta korttia, päivitettiin ${updatedCount} kortin määrä.`;
+      setStatus(summaryMessage);
+      setToast(summaryMessage);
+    } catch (err) {
+      console.error('Kokoelman tuontivirhe:', err);
+      setStatus('Kokoelman tuonti epäonnistui.');
+      setToast('Kokoelman tuonti epäonnistui.');
+    } finally {
+      setCollectionImportLoading(false);
+      setCollectionImportProgress(null);
     }
   };
 
@@ -2004,8 +2168,8 @@ function App() {
       <header className="border-b border-slate-800 bg-[#0f1117] sticky top-0 z-20 backdrop-blur-sm">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.25em] text-violet-400">pakanrakentajan kaveri</p>
-            <h1 className="text-xl font-semibold text-violet-400">EZ MTG</h1>
+            <p className="text-[10px] uppercase tracking-[0.25em] text-violet-400">v{config.version}</p>
+            <h1 className="text-xl font-semibold text-violet-400">{config.name}</h1>
           </div>
         </div>
       </header>
@@ -2583,6 +2747,11 @@ function App() {
                     ~{collectionTotalPriceEur.toFixed(2)} €
                   </span>
                 )}
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-200 hover:border-violet-500 hover:bg-slate-800">
+                  <Upload size={14} />
+                  Tuo kokoelma (ManaBox / CSV)
+                  <input type="file" accept=".csv,.txt" className="hidden" onChange={handleCollectionFileSelect} />
+                </label>
                 <button
                   type="button"
                   onClick={() => void handleSaveCollectionChanges()}
@@ -2845,9 +3014,14 @@ function App() {
                   <Library size={16} />
                   Lisää kokoelmaan
                 </button>
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-sm text-violet-200 hover:bg-violet-500/20">
+                  <Upload size={16} />
+                  Tuo kokoelmatiedosto (ManaBox / CSV)
+                  <input type="file" accept=".csv,.txt" className="hidden" onChange={handleCollectionFileSelect} />
+                </label>
                 <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">
                   <Upload size={16} />
-                  Tuo CSV / JSON
+                  Tuo pakka (CSV / JSON)
                   <input type="file" accept=".csv,.json,.txt" className="hidden" onChange={handleFileImport} />
                 </label>
                 <label className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200">
@@ -3418,6 +3592,17 @@ function App() {
           onLoadMore={() => setPrintingsPage((p) => p + 1)}
           onAddToDeck={(printing) => chooseDeckForPrinting(printing)}
           onAddToCollection={(printing) => void updateCollectionCard(printing, 1)}
+        />
+      )}
+
+      {collectionImportPending && (
+        <CollectionImportModal
+          fileName={collectionImportPending.fileName}
+          entries={collectionImportPending.entries}
+          isLoading={collectionImportLoading}
+          progress={collectionImportProgress}
+          onClose={() => setCollectionImportPending(null)}
+          onConfirm={(mode) => void executeCollectionImport(mode)}
         />
       )}
     </div>

@@ -2,6 +2,7 @@ export type ParsedDeckEntry = {
   name: string;
   count: number;
   source: string;
+  scryfall_id?: string;
   set?: string;
   collector_number?: string;
   isSideboard?: boolean;
@@ -72,8 +73,7 @@ export function parseDecklistText(rawText: string): ParsedDeckEntry[] {
       }
     }
 
-    let name = remainder.trim();
-    // Clean up double-face slashes if present (e.g. "Delver of Secrets // Insectile Aberration" -> keep full or primary)
+    const name = remainder.trim();
     if (name) {
       parsed.push({
         name,
@@ -89,6 +89,29 @@ export function parseDecklistText(rawText: string): ParsedDeckEntry[] {
   return parsed;
 }
 
+function parseCsvRow(line: string): string[] {
+  const cells: string[] = [];
+  let cell = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index++) {
+    const character = line[index];
+    if (character === '"' && quoted && line[index + 1] === '"') {
+      cell += '"';
+      index++;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (character === ',' && !quoted) {
+      cells.push(cell.trim());
+      cell = '';
+    } else {
+      cell += character;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+/** Parses CSV export from ManaBox, Moxfield, MTGGoldfish, DelverLens, or MTG-apuri */
 export function parseCsvImport(rawText: string): ParsedDeckEntry[] {
   if (!rawText || !rawText.trim()) return [];
 
@@ -97,48 +120,74 @@ export function parseCsvImport(rawText: string): ParsedDeckEntry[] {
     .map((line) => line.trim())
     .filter(Boolean);
 
+  if (lines.length === 0) return [];
+
+  const firstRow = parseCsvRow(lines[0]);
+
+  // Dynamic header mapping
+  let nameIndex = -1;
+  let countIndex = -1;
+  let scryfallIdIndex = -1;
+  let setIndex = -1;
+  let collectorNumberIndex = -1;
+  let areaIndex = -1;
+
+  for (let i = 0; i < firstRow.length; i++) {
+    const header = firstRow[i].toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (['name', 'cardname', 'card', 'kortinnimi'].includes(header) && nameIndex === -1) {
+      nameIndex = i;
+    } else if (['quantity', 'count', 'qty', 'kpl', 'amount', 'maara'].includes(header) && countIndex === -1) {
+      countIndex = i;
+    } else if (['scryfallid', 'scryfall', 'id'].includes(header) && scryfallIdIndex === -1) {
+      scryfallIdIndex = i;
+    } else if (['setcode', 'set', 'edition', 'sarja', 'expansion'].includes(header) && setIndex === -1) {
+      setIndex = i;
+    } else if (['collectornumber', 'number', 'cardnumber', 'numero'].includes(header) && collectorNumberIndex === -1) {
+      collectorNumberIndex = i;
+    } else if (['sideboard', 'section', 'area', 'board'].includes(header) && areaIndex === -1) {
+      areaIndex = i;
+    }
+  }
+
+  const hasHeader = nameIndex !== -1 || countIndex !== -1 || scryfallIdIndex !== -1;
+  const startRow = hasHeader ? 1 : 0;
+
+  // Fallback heuristic if no matching headers found
+  if (!hasHeader) {
+    const isFirstNum = Number.isFinite(Number(firstRow[0]?.replace(/x/i, '')));
+    if (isFirstNum) {
+      countIndex = 0;
+      nameIndex = 1;
+      setIndex = 2;
+      collectorNumberIndex = 4;
+      areaIndex = 5;
+    } else {
+      nameIndex = 0;
+      countIndex = 1;
+    }
+  }
+
   const parsed: ParsedDeckEntry[] = [];
 
-  for (const line of lines) {
-    const cells: string[] = [];
-    let cell = '';
-    let quoted = false;
-    for (let index = 0; index < line.length; index++) {
-      const character = line[index];
-      if (character === '"' && quoted && line[index + 1] === '"') {
-        cell += '"';
-        index++;
-      } else if (character === '"') {
-        quoted = !quoted;
-      } else if (character === ',' && !quoted) {
-        cells.push(cell.trim());
-        cell = '';
-      } else {
-        cell += character;
-      }
-    }
-    cells.push(cell.trim());
+  for (let r = startRow; r < lines.length; r++) {
+    const cells = parseCsvRow(lines[r]);
     if (cells.length < 2) continue;
 
-    const first = cells[0];
-    const second = cells[1];
-    const count = Number(first.replace(/x/i, ''));
-
-    if (!Number.isFinite(count) || count <= 0) {
-      continue;
-    }
-
-    const name = second.replace(/^"|"$/g, '').trim();
-    const set = cells[2]?.replace(/^"|"$/g, '').toLowerCase() || undefined;
-    const collectorNumber = cells[4]?.replace(/^"|"$/g, '').trim() || undefined;
-    const area = cells[5]?.replace(/^"|"$/g, '').toLowerCase();
+    const rawName = (nameIndex >= 0 ? cells[nameIndex] : '')?.replace(/^"|"$/g, '').trim();
+    const rawCount = (countIndex >= 0 ? cells[countIndex] : '')?.replace(/x/i, '').trim();
+    const scryfallId = (scryfallIdIndex >= 0 ? cells[scryfallIdIndex] : '')?.replace(/^"|"$/g, '').trim() || undefined;
+    const set = (setIndex >= 0 ? cells[setIndex] : '')?.replace(/^"|"$/g, '').trim().toLowerCase() || undefined;
+    const collectorNumber = (collectorNumberIndex >= 0 ? cells[collectorNumberIndex] : '')?.replace(/^"|"$/g, '').trim() || undefined;
+    const area = (areaIndex >= 0 ? cells[areaIndex] : '')?.replace(/^"|"$/g, '').toLowerCase().trim();
     const isSideboard = area === 'sideboard' || area === 'sb';
 
-    if (name) {
+    const count = Number(rawCount) || 1;
+    if (rawName || scryfallId) {
       parsed.push({
-        name,
-        count,
+        name: rawName || 'Tuntematon kortti',
+        count: Math.max(1, count),
         source: 'csv',
+        scryfall_id: scryfallId,
         set,
         collector_number: collectorNumber,
         isSideboard,
