@@ -46,6 +46,12 @@ export interface MtgCard {
     };
   }>;
   scryfall_uri?: string;
+  prices?: {
+    eur?: string | null;
+    usd?: string | null;
+    eur_foil?: string | null;
+    usd_foil?: string | null;
+  };
   cached_at?: number;
 }
 

@@ -63,6 +63,12 @@ export function sanitizeScryfallCard(raw: any): MtgCard {
       } : undefined,
     })) : undefined,
     scryfall_uri: raw.scryfall_uri,
+    prices: raw.prices ? {
+      eur: raw.prices.eur ?? null,
+      usd: raw.prices.usd ?? null,
+      eur_foil: raw.prices.eur_foil ?? null,
+      usd_foil: raw.prices.usd_foil ?? null,
+    } : undefined,
     cached_at: Date.now(),
   };
 }

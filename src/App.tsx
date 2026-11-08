@@ -8,7 +8,6 @@ import {
   Crown,
   Copy,
   Download,
-  ExternalLink,
   FolderPlus,
   Heart,
   Info,
@@ -31,9 +30,27 @@ import {
   X,
 } from 'lucide-react';
 import { db, importAllData } from './db';
-import { fetchCardRulings, fetchCardSymbolUris, fetchCardsBatch, getCardImageUrl, searchCardPrintings, searchCards, type CardRuling } from './services/scryfall';
+import {
+  autocompleteCardName,
+  fetchCardRulings,
+  fetchCardSymbolUris,
+  fetchCardsBatch,
+  getCardImageUrl,
+  searchCardPrintings,
+  searchCards,
+  type CardRuling,
+} from './services/scryfall';
 import type { CollectionCard, Deck, DeckCard, MtgCard, WishlistCard } from './types';
-import { parseCsvImport, parseDecklistText, type ParsedDeckEntry } from './utils/decklist';
+import {
+  formatArenaExport,
+  parseCsvImport,
+  parseDecklistText,
+  type ParsedDeckEntry,
+} from './utils/decklist';
+import { ManaCurve } from './components/ManaCurve';
+import { SampleHandModal } from './components/SampleHandModal';
+import { CardInfoModal } from './components/CardInfoModal';
+import { PrintingsModal } from './components/PrintingsModal';
 
 const tabs = [
   { id: 'decks', label: 'Pakat', icon: Layers },
@@ -543,6 +560,10 @@ function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [pendingDeckCard, setPendingDeckCard] = useState<MtgCard | null>(null);
   const [importText, setImportText] = useState('');
+  const [playtestDeck, setPlaytestDeck] = useState<Deck | null>(null);
+  const [searchSuggestions, setSearchSuggestions] = useState<string[]>([]);
+  const [showSearchSuggestions, setShowSearchSuggestions] = useState(false);
+  const [autoSaveEnabled] = useState(true);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const selectedDeck = decks.find((deck) => deck.id === selectedDeckId) ?? null;
@@ -561,6 +582,18 @@ function App() {
   const deckTotal = selectedDeck?.cards.filter((card) => !card.isSideboard).reduce((sum, card) => sum + card.count, 0) ?? 0;
   const sideboardTotal = selectedDeck?.cards.filter((card) => card.isSideboard).reduce((sum, card) => sum + card.count, 0) ?? 0;
   const collectionTotal = collection.reduce((sum, item) => sum + item.count, 0);
+  const collectionTotalPriceEur = useMemo(() => {
+    return collection.reduce((sum, item) => {
+      const p = item.card.prices?.eur ? parseFloat(item.card.prices.eur) : 0;
+      return sum + (isNaN(p) ? 0 : p * item.count);
+    }, 0);
+  }, [collection]);
+  const wishlistTotalPriceEur = useMemo(() => {
+    return wishlist.reduce((sum, item) => {
+      const p = item.card.prices?.eur ? parseFloat(item.card.prices.eur) : 0;
+      return sum + (isNaN(p) ? 0 : p);
+    }, 0);
+  }, [wishlist]);
   const filteredDeckCards = useMemo(
     () => {
       const query = deckSearch.trim().toLocaleLowerCase();
@@ -881,6 +914,38 @@ function App() {
     };
   }, [searchTerm]);
 
+  // Autocomplete suggestion dropdown effect
+  useEffect(() => {
+    const trimmed = searchTerm.trim();
+    if (trimmed.length < 2) {
+      setSearchSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const suggestions = await autocompleteCardName(trimmed);
+      if (!cancelled) {
+        setSearchSuggestions(suggestions.slice(0, 8));
+      }
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [searchTerm]);
+
+  // Warn before leaving if unsaved changes exist
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (dirtyDeckIds.size > 0 || dirtyCollectionIds.size > 0) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [dirtyDeckIds, dirtyCollectionIds]);
+
   const loadMoreSearchResults = async () => {
     if (loading || loadingMoreSearchResults) return;
 
@@ -1146,6 +1211,23 @@ function App() {
     }
   };
 
+  // Autosave effect (debounced 2.5s)
+  useEffect(() => {
+    if (!autoSaveEnabled) return;
+    if (dirtyDeckIds.size === 0 && dirtyCollectionIds.size === 0 && pendingWishlistRemovals.size === 0) return;
+
+    const timer = window.setTimeout(() => {
+      if (dirtyDeckIds.size > 0) {
+        void saveDeckChanges();
+      }
+      if (dirtyCollectionIds.size > 0 || pendingWishlistRemovals.size > 0) {
+        void saveCollectionChanges();
+      }
+    }, 2500);
+
+    return () => window.clearTimeout(timer);
+  }, [dirtyDeckIds, dirtyCollectionIds, pendingWishlistRemovals, autoSaveEnabled, decks, collection]);
+
   const navigateToTab = (nextTab: (typeof tabs)[number]['id']) => {
     setTab(nextTab);
   };
@@ -1347,6 +1429,19 @@ function App() {
     setStatus('Pakka poistettu');
   };
 
+  const handleCopyArenaExport = async (deck: Deck) => {
+    try {
+      const arenaText = formatArenaExport(deck.name, deck.cards, deck.commanderCardId);
+      await navigator.clipboard.writeText(arenaText);
+      const msg = `Pakka "${deck.name}" kopioitu leikepöydälle Arena-muodossa!`;
+      setToast(msg);
+      setStatus(msg);
+    } catch (err) {
+      console.error('Leikepöydälle kopiointi epäonnistui:', err);
+      setStatus('Kopiointi leikepöydälle epäonnistui.');
+    }
+  };
+
   const applyImportedEntries = async (entries: ParsedDeckEntry[]) => {
     if (!entries.length) {
       setStatus('Ei kortteja tuoda');
@@ -1360,33 +1455,65 @@ function App() {
     const deck = decks.find((item) => item.id === selectedDeckId);
     if (!deck) return;
 
-    const { found } = await fetchCardsBatch(entries.map((entry) => ({ name: entry.name })));
+    const identifiers = entries.map((entry) => {
+      if (entry.set && entry.collector_number) {
+        return { set: entry.set, collector_number: entry.collector_number };
+      }
+      return { name: entry.name };
+    });
+
+    const { found } = await fetchCardsBatch(identifiers);
     const foundByName = new Map<string, MtgCard>();
+    const foundBySetNumber = new Map<string, MtgCard>();
+
     for (const card of found) {
       foundByName.set(card.name.toLowerCase(), card);
+      foundBySetNumber.set(`${card.set.toLowerCase()}:${card.collector_number.toLowerCase()}`, card);
     }
 
     const nextCards = [...deck.cards];
     const importedCardCounts = new Map<string, { card: MtgCard; count: number }>();
+
     for (const entry of entries) {
-      const card = foundByName.get(entry.name.toLowerCase());
+      let card: MtgCard | undefined;
+      if (entry.set && entry.collector_number) {
+        card = foundBySetNumber.get(`${entry.set.toLowerCase()}:${entry.collector_number.toLowerCase()}`);
+      }
+      if (!card) {
+        card = foundByName.get(entry.name.toLowerCase());
+      }
       if (!card) continue;
+
       const imported = importedCardCounts.get(card.id);
       importedCardCounts.set(card.id, { card, count: (imported?.count ?? 0) + entry.count });
-      const existingIndex = nextCards.findIndex((item) => item.cardId === card.id);
+
+      const isSideboard = Boolean(entry.isSideboard);
+      const existingIndex = nextCards.findIndex(
+        (item) => item.cardId === card.id && Boolean(item.isSideboard) === isSideboard
+      );
+
       if (existingIndex >= 0) {
         nextCards[existingIndex] = {
           ...nextCards[existingIndex],
           count: nextCards[existingIndex].count + entry.count,
         };
       } else {
-        nextCards.push({ cardId: card.id, card, count: entry.count, addedAt: Date.now(), isSideboard: false });
+        nextCards.push({
+          cardId: card.id,
+          card,
+          count: entry.count,
+          addedAt: Date.now(),
+          isSideboard,
+        });
       }
     }
 
     for (const { card, count } of importedCardCounts.values()) await ensureCardInCollection(card, count);
     await updateDeck({ ...deck, cards: nextCards });
-    setStatus(`Tuotiin ${entries.length} korttiriviä pakkaan ${deck.name}; tallenna muutokset Pakat-näkymässä.`);
+    const sbCount = entries.filter((e) => e.isSideboard).length;
+    const msg = `Tuotiin ${entries.length} korttiriviä pakkaan ${deck.name}${sbCount > 0 ? ` (${sbCount} sideboardiin)` : ''}.`;
+    setStatus(msg);
+    setToast(msg);
   };
 
   const handleExport = (scope: 'all' | 'deck' | 'collection', deck?: Deck) => {
@@ -1833,7 +1960,12 @@ function App() {
               <div className="mt-1"><CardManaCost card={entry.card} symbols={symbolUris} /></div>
             </div>
             <div className="mt-2 flex items-center justify-between">
-              <span className="text-sm font-semibold text-white">{entry.count} kpl</span>
+              <div>
+                <span className="text-sm font-semibold text-white">{entry.count} kpl</span>
+                {entry.card.prices?.eur && (
+                  <span className="ml-1.5 text-[11px] font-medium text-emerald-400">· {entry.card.prices.eur} €</span>
+                )}
+              </div>
               {renderDeckCardMenu(entry)}
             </div>
           </>
@@ -1854,7 +1986,12 @@ function App() {
                 {typeLine} · {entry.card.set.toUpperCase()} #{entry.card.collector_number}
               </div>
             </button>
-            <span className="min-w-10 text-center text-sm font-semibold text-white">{entry.count} kpl</span>
+            <div className="text-right">
+              <div className="min-w-10 text-sm font-semibold text-white">{entry.count} kpl</div>
+              {entry.card.prices?.eur && (
+                <div className="text-[11px] font-medium text-emerald-400">{entry.card.prices.eur} €</div>
+              )}
+            </div>
             {renderDeckCardMenu(entry)}
           </>
         )}
@@ -2133,6 +2270,15 @@ function App() {
                     </div>
                   </div>
 
+                  <ManaCurve
+                    cards={selectedDeck.cards}
+                    commanderCardId={selectedDeck.commanderCardId}
+                    isCommanderDeck={Boolean(selectedDeck.format?.toLowerCase().includes('commander'))}
+                    symbols={symbolUris}
+                    onPlaytestClick={() => setPlaytestDeck(selectedDeck)}
+                    onArenaExportClick={() => void handleCopyArenaExport(selectedDeck)}
+                  />
+
                   <CardFilterControls
                     filters={deckFilters}
                     onChange={setDeckFilters}
@@ -2208,24 +2354,56 @@ function App() {
 
         {tab === 'search' && (
           <section className="rounded-2xl border border-slate-800 bg-[#10141d] p-4">
-            <div className="mb-4 flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-950/80 px-3 py-3">
-              <Search size={18} className="text-slate-400" />
-              <input
-                ref={searchInputRef}
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Hae korttia, esim. Lightning Bolt..."
-                className="w-full min-w-0 bg-transparent text-sm text-white placeholder:text-slate-500 focus:outline-none"
-              />
-              {searchTerm && (
-                <button
-                  type="button"
-                  onClick={() => setSearchTerm('')}
-                  aria-label="Tyhjennä korttihaku"
-                  className="shrink-0 rounded-full p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
-                >
-                  <X size={18} />
-                </button>
+            <div className="relative mb-4">
+              <div className="flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-950/80 px-3 py-3 focus-within:border-violet-500">
+                <Search size={18} className="text-slate-400" />
+                <input
+                  ref={searchInputRef}
+                  value={searchTerm}
+                  onChange={(event) => {
+                    setSearchTerm(event.target.value);
+                    setShowSearchSuggestions(true);
+                  }}
+                  onFocus={() => setShowSearchSuggestions(true)}
+                  onBlur={() => {
+                    // Delay so clicking a suggestion still fires
+                    setTimeout(() => setShowSearchSuggestions(false), 200);
+                  }}
+                  placeholder="Hae korttia, esim. Lightning Bolt..."
+                  className="w-full min-w-0 bg-transparent text-sm text-white placeholder:text-slate-500 focus:outline-none"
+                />
+                {searchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchTerm('');
+                      setShowSearchSuggestions(false);
+                    }}
+                    aria-label="Tyhjennä korttihaku"
+                    className="shrink-0 rounded-full p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                  >
+                    <X size={18} />
+                  </button>
+                )}
+              </div>
+              {showSearchSuggestions && searchSuggestions.length > 0 && (
+                <ul className="absolute left-0 right-0 top-full z-40 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900/95 py-1 shadow-2xl backdrop-blur-md">
+                  {searchSuggestions.map((suggestion) => (
+                    <li key={suggestion}>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setSearchTerm(suggestion);
+                          setShowSearchSuggestions(false);
+                        }}
+                        className="w-full px-4 py-2 text-left text-sm text-slate-200 hover:bg-violet-500/20 hover:text-white"
+                      >
+                        {suggestion}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
 
@@ -2400,6 +2578,11 @@ function App() {
                 <span className="rounded-full border border-violet-500/50 bg-violet-500/10 px-3 py-1 text-sm text-violet-200">
                   {collectionTotal} korttia · {collection.length} eri korttia
                 </span>
+                {collectionTotalPriceEur > 0 && (
+                  <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-sm text-emerald-300">
+                    ~{collectionTotalPriceEur.toFixed(2)} €
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={() => void handleSaveCollectionChanges()}
@@ -2484,7 +2667,12 @@ function App() {
                           <div className="mt-1"><CardManaCost card={entry.card} symbols={symbolUris} /></div>
                         </div>
                         <div className="mt-2 flex items-center justify-between">
-                          <span className="text-sm font-semibold text-white">{entry.count} kpl</span>
+                          <div>
+                            <span className="text-sm font-semibold text-white">{entry.count} kpl</span>
+                            {entry.card.prices?.eur && (
+                              <span className="ml-1.5 text-[11px] font-medium text-emerald-400">· {entry.card.prices.eur} €</span>
+                            )}
+                          </div>
                           {renderCardActionMenu(entry.card, `collection:${entry.id}`, 'collection')}
                         </div>
                       </>
@@ -2506,7 +2694,12 @@ function App() {
                           </div>
                         </button>
                         <div className="flex flex-wrap items-center justify-end gap-2">
-                          <span className="min-w-10 text-center text-sm font-semibold text-white">{entry.count} kpl</span>
+                          <div className="text-right">
+                            <div className="min-w-10 text-sm font-semibold text-white">{entry.count} kpl</div>
+                            {entry.card.prices?.eur && (
+                              <div className="text-[11px] font-medium text-emerald-400">{entry.card.prices.eur} €</div>
+                            )}
+                          </div>
                           {renderCardActionMenu(entry.card, `collection:${entry.id}`, 'collection')}
                         </div>
                       </>
@@ -2529,6 +2722,11 @@ function App() {
                 <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-sm text-rose-200">
                   {wishlist.length} korttia
                 </span>
+                {wishlistTotalPriceEur > 0 && (
+                  <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-sm text-emerald-300">
+                    ~{wishlistTotalPriceEur.toFixed(2)} €
+                  </span>
+                )}
                 <CardViewToggle view={cardView} onChange={setCardView} />
               </div>
             </div>
@@ -2568,7 +2766,12 @@ function App() {
                           <div className="mt-1"><CardManaCost card={entry.card} symbols={symbolUris} /></div>
                         </div>
                         <div className="mt-2 flex items-center justify-between">
-                          <span className="inline-flex items-center gap-1 text-xs text-rose-200"><Heart size={13} className="fill-rose-300" /> Toivelistalla</span>
+                          <div>
+                            <span className="inline-flex items-center gap-1 text-xs text-rose-200"><Heart size={13} className="fill-rose-300" /> Toivelistalla</span>
+                            {entry.card.prices?.eur && (
+                              <span className="ml-1.5 text-[11px] font-medium text-emerald-400">· {entry.card.prices.eur} €</span>
+                            )}
+                          </div>
                           {renderCardActionMenu(entry.card, `wishlist:${entry.id}`, 'wishlist')}
                         </div>
                       </>
@@ -2581,8 +2784,13 @@ function App() {
                           </div>
                           <div className="mt-1 text-xs text-slate-400">{entry.card.type_line} · {entry.card.set.toUpperCase()} #{entry.card.collector_number}</div>
                         </button>
-                        <span className="inline-flex items-center gap-1 text-xs text-rose-200"><Heart size={13} className="fill-rose-300" /></span>
-                        {renderCardActionMenu(entry.card, `wishlist:${entry.id}`, 'wishlist')}
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          {entry.card.prices?.eur && (
+                            <span className="text-[11px] font-medium text-emerald-400">{entry.card.prices.eur} €</span>
+                          )}
+                          <span className="inline-flex items-center gap-1 text-xs text-rose-200"><Heart size={13} className="fill-rose-300" /></span>
+                          {renderCardActionMenu(entry.card, `wishlist:${entry.id}`, 'wishlist')}
+                        </div>
                       </>
                     )}
                   </div>
@@ -2614,12 +2822,23 @@ function App() {
                 <button
                   type="button"
                   onClick={async () => {
-                    const result = await fetchCardsBatch(importEntries.map((entry) => ({ name: entry.name })));
+                    const identifiers = importEntries.map((entry) => {
+                      if (entry.set && entry.collector_number) {
+                        return { set: entry.set, collector_number: entry.collector_number };
+                      }
+                      return { name: entry.name };
+                    });
+                    const result = await fetchCardsBatch(identifiers);
                     const cardsByName = new Map(result.found.map((card) => [card.name.toLowerCase(), card]));
+                    const cardsBySetNumber = new Map(result.found.map((card) => [`${card.set.toLowerCase()}:${card.collector_number.toLowerCase()}`, card]));
                     for (const entry of importEntries) {
-                      const card = cardsByName.get(entry.name.toLowerCase());
+                      const card = (entry.set && entry.collector_number && cardsBySetNumber.get(`${entry.set.toLowerCase()}:${entry.collector_number.toLowerCase()}`))
+                        || cardsByName.get(entry.name.toLowerCase());
                       if (card) await updateCollectionCard(card, entry.count);
                     }
+                    const msg = `Lisättiin ${importEntries.length} korttia kokoelmaan.`;
+                    setStatus(msg);
+                    setToast(msg);
                   }}
                   className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
                 >
@@ -3091,99 +3310,24 @@ function App() {
         </div>
       )}
 
+      {playtestDeck && (
+        <SampleHandModal
+          deckName={playtestDeck.name}
+          cards={playtestDeck.cards}
+          onClose={() => setPlaytestDeck(null)}
+          onCardClick={(card) => openCardPreview(card)}
+        />
+      )}
+
       {cardInfoEntry && (
-        <div
-          className="fixed inset-0 z-[65] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
-          role="presentation"
-          onClick={() => setCardInfoEntry(null)}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="card-info-title"
-            className="flex max-h-[88dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-[#10141d] shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header className="flex items-start justify-between gap-4 border-b border-slate-800 p-4">
-              <div className="min-w-0">
-                <h2 id="card-info-title" className="truncate text-lg font-semibold text-white">{cardInfoEntry.card.name}</h2>
-                <p className="mt-1 text-sm text-slate-400">{cardInfoEntry.card.type_line}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setCardInfoEntry(null)}
-                aria-label="Sulje kortin tiedot"
-                className="rounded-lg bg-slate-800 p-2 text-slate-200 hover:bg-slate-700"
-              >
-                <X size={18} />
-              </button>
-            </header>
-            <div className="min-h-0 space-y-4 overflow-y-auto p-4">
-              <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
-                <div><dt className="text-xs text-slate-500">Painos</dt><dd className="mt-1 text-slate-200">{cardInfoEntry.card.set_name ?? cardInfoEntry.card.set.toUpperCase()}</dd></div>
-                <div><dt className="text-xs text-slate-500">Keräilynumero</dt><dd className="mt-1 text-slate-200">#{cardInfoEntry.card.collector_number}</dd></div>
-                <div><dt className="text-xs text-slate-500">Harvinaisuus</dt><dd className="mt-1 capitalize text-slate-200">{cardInfoEntry.card.rarity}</dd></div>
-                {cardInfoEntry.card.released_at && (
-                  <div><dt className="text-xs text-slate-500">Julkaistu</dt><dd className="mt-1 text-slate-200">{cardInfoEntry.card.released_at}</dd></div>
-                )}
-                {cardInfoEntry.card.artist && (
-                  <div><dt className="text-xs text-slate-500">Kuvittaja</dt><dd className="mt-1 text-slate-200">{cardInfoEntry.card.artist}</dd></div>
-                )}
-              </dl>
-              {(cardInfoEntry.card.card_faces ?? []).map((face, index) => (
-                <div key={`${face.name}-${index}`} className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="font-medium text-white">{face.name}</h3>
-                    {face.mana_cost && <CardManaCost card={{ ...cardInfoEntry.card, selected_face_index: index }} symbols={symbolUris} />}
-                  </div>
-                  {face.type_line && <p className="mt-1 text-xs text-slate-400">{face.type_line}</p>}
-                  {face.oracle_text && <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-300">{face.oracle_text}</p>}
-                </div>
-              ))}
-              {!(cardInfoEntry.card.card_faces?.length) && cardInfoEntry.card.oracle_text && (
-                <p className="whitespace-pre-line rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-sm leading-relaxed text-slate-300">
-                  {cardInfoEntry.card.oracle_text}
-                </p>
-              )}
-              {cardInfoEntry.card.flavor_text && (
-                <blockquote className="border-l-2 border-violet-500 pl-3 text-sm italic text-slate-400">
-                  {cardInfoEntry.card.flavor_text}
-                </blockquote>
-              )}
-              <section>
-                <h3 className="font-semibold text-white">Sääntöhuomiot</h3>
-                {cardRulingsLoading && <p className="mt-2 text-sm text-slate-400">Haetaan Scryfallista…</p>}
-                {cardRulingsError && <p role="alert" className="mt-2 text-sm text-amber-300">{cardRulingsError}</p>}
-                {!cardRulingsLoading && !cardRulingsError && cardRulings.length === 0 && (
-                  <p className="mt-2 text-sm text-slate-400">Kortille ei löytynyt erillisiä sääntöhuomioita.</p>
-                )}
-                <div className="mt-2 space-y-2">
-                  {cardRulings.map((ruling, index) => (
-                    <article key={`${ruling.published_at}-${index}`} className="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
-                      <div className="mb-1 flex flex-wrap justify-between gap-2 text-xs text-slate-500">
-                        <span>{ruling.source}</span><span>{ruling.published_at}</span>
-                      </div>
-                      <p className="text-sm leading-relaxed text-slate-300">{ruling.comment}</p>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            </div>
-            {cardInfoEntry.card.scryfall_uri && (
-              <footer className="border-t border-slate-800 p-4">
-                <a
-                  href={cardInfoEntry.card.scryfall_uri}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-2 text-sm font-medium text-violet-300 hover:text-violet-200"
-                >
-                  <ExternalLink size={15} />
-                  Avaa kortti Scryfallissa
-                </a>
-              </footer>
-            )}
-          </section>
-        </div>
+        <CardInfoModal
+          entry={cardInfoEntry}
+          cardRulings={cardRulings}
+          cardRulingsLoading={cardRulingsLoading}
+          cardRulingsError={cardRulingsError}
+          onClose={() => setCardInfoEntry(null)}
+          renderManaCost={(card) => <CardManaCost card={card} symbols={symbolUris} />}
+        />
       )}
 
       {previewCard && (
@@ -3261,126 +3405,20 @@ function App() {
       )}
 
       {printingCard && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3 backdrop-blur-sm sm:p-6"
-          role="presentation"
-          onClick={() => setPrintingCard(null)}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="printings-title"
-            className="flex max-h-[92dvh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-[#10141d] shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header className="flex items-start justify-between gap-4 border-b border-slate-800 p-4 sm:p-5">
-              <div className="min-w-0">
-                <h2 id="printings-title" className="truncate text-lg font-semibold text-white sm:text-xl">
-                  {printingCard.name} – julkaisut
-                </h2>
-                <p className="mt-1 text-sm text-slate-400">Valitse haluamasi kuvitus ja painos.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPrintingCard(null)}
-                aria-label="Sulje julkaisujen valinta"
-                className="shrink-0 rounded-lg bg-slate-800 p-2 text-slate-200 hover:bg-slate-700"
-              >
-                <X size={20} />
-              </button>
-            </header>
-
-            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
-              {printingsError && (
-                <p role="alert" className="mb-4 rounded-lg border border-red-900 bg-red-950/50 p-3 text-sm text-red-200">
-                  {printingsError}
-                </p>
-              )}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                {printings.map((printing) => {
-                  const imageUrl = getCardImageUrl(printing, 'normal') ?? getCardImageUrl(printing, 'small');
-                  const isSelected = selectedPrinting?.id === printing.id;
-                  return (
-                    <div
-                      key={printing.id}
-                      className={`rounded-xl border p-2 text-left transition ${
-                        isSelected
-                          ? 'border-violet-400 bg-violet-500/15 ring-1 ring-violet-400'
-                          : 'border-slate-800 bg-slate-950/70 hover:border-slate-600'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedPrinting(printing);
-                          openCardPreview(printing, 'printings');
-                        }}
-                        aria-label={`Näytä ${printing.name}, ${printing.set_name ?? printing.set}, isompana`}
-                        className="block w-full overflow-hidden rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400"
-                      >
-                        <img
-                          src={imageUrl ?? 'https://placehold.co/488x680/111827/9ca3af?text=No+image'}
-                          alt={`${printing.name}, ${printing.set_name ?? printing.set}`}
-                          loading="lazy"
-                          className="mx-auto aspect-[5/7] w-full rounded-lg object-cover"
-                        />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedPrinting(printing)}
-                        aria-pressed={isSelected}
-                        className="mt-2 block w-full text-left"
-                      >
-                        <span className="block truncate text-sm font-medium text-white">
-                          {printing.set_name ?? printing.set.toUpperCase()}
-                        </span>
-                        <span className="block truncate text-xs text-slate-400">
-                          {printing.set.toUpperCase()} · #{printing.collector_number}
-                          {printing.lang ? ` · ${printing.lang.toUpperCase()}` : ''}
-                        </span>
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {printingsLoading && <p className="py-5 text-center text-sm text-slate-400">Haetaan julkaisuja…</p>}
-              {!printingsLoading && !printingsError && printings.length === 0 && (
-                <p className="py-5 text-center text-sm text-slate-400">Julkaisuja ei löytynyt.</p>
-              )}
-              {printingsHasMore && !printingsLoading && (
-                <button
-                  type="button"
-                  onClick={() => setPrintingsPage((page) => page + 1)}
-                  className="mx-auto mt-4 block rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800"
-                >
-                  Lataa lisää julkaisuja
-                </button>
-              )}
-            </div>
-
-            <footer className="flex flex-col gap-2 border-t border-slate-800 p-4 sm:flex-row sm:justify-end sm:p-5">
-              <button
-                type="button"
-                disabled={!selectedPrinting}
-                onClick={() => selectedPrinting && chooseDeckForPrinting(selectedPrinting)}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Plus size={16} />
-                Lisää valittu pakkaan
-              </button>
-              <button
-                type="button"
-                disabled={!selectedPrinting}
-                onClick={() => selectedPrinting && void updateCollectionCard(selectedPrinting, 1)}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-medium text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Library size={16} />
-                Lisää valittu kokoelmaan
-              </button>
-            </footer>
-          </section>
-        </div>
+        <PrintingsModal
+          card={printingCard}
+          printings={printings}
+          selectedPrinting={selectedPrinting}
+          printingsLoading={printingsLoading}
+          printingsError={printingsError}
+          printingsHasMore={printingsHasMore}
+          onClose={() => setPrintingCard(null)}
+          onSelectPrinting={setSelectedPrinting}
+          onPreviewPrinting={(printing) => openCardPreview(printing, 'printings')}
+          onLoadMore={() => setPrintingsPage((p) => p + 1)}
+          onAddToDeck={(printing) => chooseDeckForPrinting(printing)}
+          onAddToCollection={(printing) => void updateCollectionCard(printing, 1)}
+        />
       )}
     </div>
   );
