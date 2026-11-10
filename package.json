@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "bump-version": "node scripts/bump-version.js",
+    "ship": "node scripts/ship.js",
+    "push": "node scripts/ship.js",
     "preview": "vite preview"
   },
   "dependencies": {

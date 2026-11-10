@@ -47,6 +47,7 @@ import {
   formatArenaExport,
   parseCsvImport,
   parseDecklistText,
+  parseJsonImport,
   type ParsedDeckEntry,
 } from './utils/decklist';
 import { config } from './config.js';
@@ -595,6 +596,7 @@ function App() {
   const [collectionImportPending, setCollectionImportPending] = useState<{
     entries: ParsedDeckEntry[];
     fileName: string;
+    rawCards?: MtgCard[];
   } | null>(null);
   const [collectionImportLoading, setCollectionImportLoading] = useState(false);
   const [collectionImportProgress, setCollectionImportProgress] = useState<{ current: number; total: number } | null>(null);
@@ -1995,57 +1997,69 @@ function App() {
     try {
       const raw = await file.text();
 
-      if (file.name.toLowerCase().endsWith('.json')) {
-        const parsed = JSON.parse(raw) as {
-          decks?: Deck[];
-          collection?: CollectionCard[];
-          wishlist?: WishlistCard[];
-        };
-        if (!parsed || (!parsed.decks && !parsed.collection && !parsed.wishlist)) {
-          throw new Error('Virheellinen JSON');
-        }
-        const importedDecks = parsed.decks ?? [];
-        await importAllData({
-          version: 2,
-          exportedAt: Date.now(),
-          decks: importedDecks,
-          collection: parsed.collection ?? [],
-          wishlist: parsed.wishlist ?? [],
-        }, 'merge');
-        await refreshDecks();
-        await refreshCollection();
-        await refreshWishlist();
+      if (file.name.toLowerCase().endsWith('.json') || raw.trim().startsWith('{') || raw.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && (parsed.decks || parsed.collection || parsed.wishlist)) {
+            const importedDecks: Deck[] = parsed.decks ?? [];
+            await importAllData({
+              version: 2,
+              exportedAt: Date.now(),
+              decks: importedDecks,
+              collection: parsed.collection ?? [],
+              wishlist: parsed.wishlist ?? [],
+            }, 'merge');
+            await refreshDecks();
+            await refreshCollection();
+            await refreshWishlist();
 
-        // Ensure all deck cards are also in collection
-        for (const d of importedDecks) {
-          for (const entry of d.cards) {
-            await ensureCardInCollection(entry.card, entry.count);
+            // Ensure all deck cards are also in collection
+            for (const d of importedDecks) {
+              for (const entry of d.cards) {
+                await ensureCardInCollection(entry.card, entry.count);
+              }
+            }
+
+            const decksNeedPrices = importedDecks.filter((d) => d.cards.some((c) => !c.card?.prices));
+            if (decksNeedPrices.length > 0) {
+              setStatus('Tuonti onnistui! Haetaan puuttuvia hintoja Scryfallista…');
+              setToast('Tuonti onnistui. Haetaan puuttuvia hintoja…');
+              for (const deckToBackfill of decksNeedPrices) {
+                await refreshDeckPrices(deckToBackfill);
+              }
+            } else {
+              const msg = importedDecks.length > 0
+                ? `Tuotiin ${importedDecks.length} pakka(a) onnistuneesti!`
+                : `Tuotiin ${parsed.collection?.length ?? 0} korttia kokoelmaan!`;
+              setStatus(msg);
+              setToast(msg);
+            }
+            return;
           }
+        } catch {
+          // If direct JSON structure parse failed, fall through to parseJsonImport
         }
 
-        const decksNeedPrices = importedDecks.filter((d) => d.cards.some((c) => !c.card?.prices));
-        if (decksNeedPrices.length > 0) {
-          setStatus('Import onnistui! Haetaan puuttuvia hintoja Scryfallista…');
-          setToast('Tuonti onnistui. Haetaan puuttuvia hintoja…');
-          for (const deckToBackfill of decksNeedPrices) {
-            await refreshDeckPrices(deckToBackfill);
-          }
-        } else {
-          setStatus('Import onnistui');
-          setToast('Tuonti onnistui.');
-        }
-      } else {
-        const parsed = file.name.toLowerCase().endsWith('.csv') ? parseCsvImport(raw) : parseDecklistText(raw);
-        if (parsed.length) {
+        const parsedJsonEntries = parseJsonImport(raw);
+        if (parsedJsonEntries.length > 0) {
           const suggestedName = file.name.replace(/\.[^/.]+$/, '');
-          await importAsNewDeck(parsed, suggestedName);
-        } else {
-          setStatus('Tiedostosta ei löytynyt kortteja');
+          await importAsNewDeck(parsedJsonEntries, suggestedName);
+          return;
         }
+      }
+
+      const parsed = file.name.toLowerCase().endsWith('.csv') ? parseCsvImport(raw) : parseDecklistText(raw);
+      if (parsed.length) {
+        const suggestedName = file.name.replace(/\.[^/.]+$/, '');
+        await importAsNewDeck(parsed, suggestedName);
+      } else {
+        setStatus('Tiedostosta ei löytynyt kortteja');
+        setToast('Tiedostosta ei löytynyt kortteja.');
       }
     } catch (error) {
       console.error(error);
       setStatus('Tiedoston import epäonnistui');
+      setToast('Tiedoston tuonti epäonnistui.');
     } finally {
       event.target.value = '';
     }
@@ -2057,9 +2071,39 @@ function App() {
 
     try {
       const text = await file.text();
-      const parsed = file.name.toLowerCase().endsWith('.csv')
-        ? parseCsvImport(text)
-        : parseDecklistText(text);
+      let parsed: ParsedDeckEntry[] = [];
+      const rawCards: MtgCard[] = [];
+
+      if (file.name.toLowerCase().endsWith('.json') || text.trim().startsWith('{') || text.trim().startsWith('[')) {
+        parsed = parseJsonImport(text);
+        try {
+          const json = JSON.parse(text);
+          if (Array.isArray(json)) {
+            for (const item of json) {
+              if (item?.card && item.card.id) rawCards.push(item.card);
+            }
+          } else if (typeof json === 'object' && json !== null) {
+            if (Array.isArray(json.collection)) {
+              for (const item of json.collection) {
+                if (item?.card && item.card.id) rawCards.push(item.card);
+              }
+            }
+            if (Array.isArray(json.decks)) {
+              for (const d of json.decks) {
+                if (Array.isArray(d?.cards)) {
+                  for (const c of d.cards) {
+                    if (c?.card && c.card.id) rawCards.push(c.card);
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+      } else if (file.name.toLowerCase().endsWith('.csv')) {
+        parsed = parseCsvImport(text);
+      } else {
+        parsed = parseDecklistText(text);
+      }
 
       if (parsed.length === 0) {
         setStatus('Tiedostosta ei löytynyt kortteja tuotavaksi.');
@@ -2070,10 +2114,12 @@ function App() {
       setCollectionImportPending({
         entries: parsed,
         fileName: file.name,
+        rawCards: rawCards.length > 0 ? rawCards : undefined,
       });
     } catch (err) {
       console.error('Kokoelmatiedoston luku epäonnistui:', err);
       setStatus('Kokoelmatiedoston luku epäonnistui.');
+      setToast('Kokoelmatiedoston luku epäonnistui.');
     } finally {
       event.target.value = '';
     }
@@ -2081,36 +2127,53 @@ function App() {
 
   const executeCollectionImport = async (mode: 'sync' | 'add' | 'replace') => {
     if (!collectionImportPending) return;
-    const { entries } = collectionImportPending;
+    const { entries, rawCards } = collectionImportPending;
 
     setCollectionImportLoading(true);
     setCollectionImportProgress({ current: 0, total: entries.length });
 
     try {
       const chunkSize = 75;
-      const allFound: MtgCard[] = [];
-
-      for (let i = 0; i < entries.length; i += chunkSize) {
-        const chunk = entries.slice(i, i + chunkSize);
-        const identifiers = chunk.map((e) => {
-          if (e.scryfall_id) return { id: e.scryfall_id };
-          if (e.set && e.collector_number) return { set: e.set, collector_number: e.collector_number };
-          return { name: e.name };
-        });
-
-        const { found } = await fetchCardsBatch(identifiers);
-        allFound.push(...found);
-        setCollectionImportProgress({ current: Math.min(i + chunkSize, entries.length), total: entries.length });
-      }
-
       const cardsById = new Map<string, MtgCard>();
       const cardsBySetNumber = new Map<string, MtgCard>();
       const cardsByName = new Map<string, MtgCard>();
 
-      for (const card of allFound) {
-        cardsById.set(card.id, card);
-        cardsBySetNumber.set(`${card.set.toLowerCase()}:${card.collector_number.toLowerCase()}`, card);
-        cardsByName.set(card.name.toLowerCase(), card);
+      if (rawCards) {
+        for (const card of rawCards) {
+          cardsById.set(card.id, card);
+          if (card.set && card.collector_number) {
+            cardsBySetNumber.set(`${card.set.toLowerCase()}:${card.collector_number.toLowerCase()}`, card);
+          }
+          cardsByName.set(card.name.toLowerCase(), card);
+          await db.cardCache.put({ ...card, cached_at: Date.now() }).catch(() => {});
+        }
+      }
+
+      const entriesToFetch = entries.filter((e) => {
+        if (e.scryfall_id && cardsById.has(e.scryfall_id)) return false;
+        if (e.set && e.collector_number && cardsBySetNumber.has(`${e.set.toLowerCase()}:${e.collector_number.toLowerCase()}`)) return false;
+        if (cardsByName.has(e.name.toLowerCase())) return false;
+        return true;
+      });
+
+      if (entriesToFetch.length > 0) {
+        for (let i = 0; i < entriesToFetch.length; i += chunkSize) {
+          const chunk = entriesToFetch.slice(i, i + chunkSize);
+          const identifiers = chunk.map((e) => {
+            if (e.scryfall_id) return { id: e.scryfall_id };
+            if (e.set && e.collector_number) return { set: e.set, collector_number: e.collector_number };
+            return { name: e.name };
+          });
+
+          const { found } = await fetchCardsBatch(identifiers);
+          for (const card of found) {
+            cardsById.set(card.id, card);
+            cardsBySetNumber.set(`${card.set.toLowerCase()}:${card.collector_number.toLowerCase()}`, card);
+            cardsByName.set(card.name.toLowerCase(), card);
+            await db.cardCache.put({ ...card, cached_at: Date.now() }).catch(() => {});
+          }
+          setCollectionImportProgress({ current: Math.min(i + chunkSize, entriesToFetch.length), total: entriesToFetch.length });
+        }
       }
 
       const targetCardMap = new Map<string, { card: MtgCard; count: number }>();
@@ -3229,8 +3292,8 @@ function App() {
                 </button>
                 <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-200 hover:border-violet-500 hover:bg-slate-800">
                   <Upload size={14} />
-                  Tuo kokoelma (ManaBox / CSV)
-                  <input type="file" accept=".csv,.txt" className="hidden" onChange={handleCollectionFileSelect} />
+                  Tuo kokoelma (JSON / CSV)
+                  <input type="file" accept=".json,.csv,.txt" className="hidden" onChange={handleCollectionFileSelect} />
                 </label>
                 <button
                   type="button"
@@ -3456,7 +3519,7 @@ function App() {
               <textarea
                 value={importText}
                 onChange={(event) => setImportText(event.target.value)}
-                placeholder={'4 Lightning Bolt (M25) 141\n2 Counterspell\nSideboard\n2 Pyroblast'}
+                placeholder={'4 Lightning Bolt (M25) 141\n2 Counterspell\nSideboard\n2 Pyroblast\n\n// Voit liittää tähän myös JSON-muotoisen pakan tai kokoelman'}
                 className="min-h-[220px] w-full rounded-xl border border-slate-700 bg-slate-950/80 p-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-violet-500 focus:outline-none"
               />
               <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -3506,13 +3569,13 @@ function App() {
                 </button>
                 <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-sm text-violet-200 hover:bg-violet-500/20">
                   <Upload size={16} />
-                  Tuo kokoelmatiedosto (ManaBox / CSV)
-                  <input type="file" accept=".csv,.txt" className="hidden" onChange={handleCollectionFileSelect} />
+                  Tuo kokoelmatiedosto (JSON / CSV)
+                  <input type="file" accept=".json,.csv,.txt" className="hidden" onChange={handleCollectionFileSelect} />
                 </label>
                 <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">
                   <Upload size={16} />
-                  Tuo pakka (CSV / JSON)
-                  <input type="file" accept=".csv,.json,.txt" className="hidden" onChange={handleFileImport} />
+                  Tuo pakka (JSON / CSV)
+                  <input type="file" accept=".json,.csv,.txt" className="hidden" onChange={handleFileImport} />
                 </label>
                 <label className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200">
                   <Download size={16} />

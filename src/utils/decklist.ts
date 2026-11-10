@@ -12,6 +12,12 @@ export type ParsedDeckEntry = {
 export function parseDecklistText(rawText: string): ParsedDeckEntry[] {
   if (!rawText || !rawText.trim()) return [];
 
+  const trimmed = rawText.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    const jsonEntries = parseJsonImport(trimmed);
+    if (jsonEntries.length > 0) return jsonEntries;
+  }
+
   const rawLines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const parsed: ParsedDeckEntry[] = [];
   let inSideboard = false;
@@ -208,6 +214,119 @@ export function parseCsvImport(rawText: string): ParsedDeckEntry[] {
   }
 
   return parsed;
+}
+
+/** Parses JSON export from MTG-apuri, ManaBox, Moxfield, Archidekt, or generic card arrays */
+export function parseJsonImport(rawText: string): ParsedDeckEntry[] {
+  try {
+    const data = JSON.parse(rawText);
+    const parsed: ParsedDeckEntry[] = [];
+
+    const extractEntry = (
+      item: Record<string, unknown> | null | undefined,
+      defaultSideboard = false,
+      defaultCommander = false,
+    ): ParsedDeckEntry | null => {
+      if (!item || typeof item !== 'object') return null;
+      const card = (item.card && typeof item.card === 'object' ? item.card : (item.name ? item : null)) as Record<string, unknown> | null;
+      if (!card && !item.name) return null;
+
+      const name = String(card?.name || item.name || '').trim();
+      if (!name) return null;
+
+      const rawCount = Number(item.count ?? item.quantity ?? item.qty ?? 1);
+      const count = Number.isFinite(rawCount) && rawCount > 0 ? rawCount : 1;
+
+      const scryfall_id = (card?.id || item.id || card?.scryfall_id || item.scryfall_id)
+        ? String(card?.id || item.id || card?.scryfall_id || item.scryfall_id)
+        : undefined;
+      const set = (card?.set || item.set) ? String(card?.set || item.set).toLowerCase().trim() : undefined;
+      const collector_number = (card?.collector_number || item.collector_number || item.collectorNumber)
+        ? String(card?.collector_number || item.collector_number || item.collectorNumber).trim()
+        : undefined;
+
+      const isSideboard = Boolean(item.isSideboard || item.sideboard || defaultSideboard);
+      const isCommander = Boolean(item.isCommander || item.commander || defaultCommander);
+
+      return {
+        name,
+        count,
+        source: 'json',
+        scryfall_id,
+        set,
+        collector_number,
+        isSideboard,
+        isCommander,
+      };
+    };
+
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        const entry = extractEntry(item as Record<string, unknown>);
+        if (entry) parsed.push(entry);
+      }
+    } else if (typeof data === 'object' && data !== null) {
+      const obj = data as Record<string, unknown>;
+
+      // 1. App export with decks
+      if (Array.isArray(obj.decks) && obj.decks.length > 0) {
+        for (const deck of obj.decks as Array<Record<string, unknown>>) {
+          const commanderId = deck.commanderCardId;
+          if (Array.isArray(deck.cards)) {
+            for (const c of deck.cards as Array<Record<string, unknown>>) {
+              const cardObj = c.card as Record<string, unknown> | undefined;
+              const isCmd = Boolean(commanderId && (c.cardId === commanderId || cardObj?.id === commanderId));
+              const entry = extractEntry(c, false, isCmd);
+              if (entry) parsed.push(entry);
+            }
+          }
+        }
+      }
+
+      // 2. App export with collection
+      if (Array.isArray(obj.collection)) {
+        for (const c of obj.collection as Array<Record<string, unknown>>) {
+          const entry = extractEntry(c);
+          if (entry) parsed.push(entry);
+        }
+      }
+
+      // 3. Single deck object with cards array
+      if (Array.isArray(obj.cards)) {
+        const commanderId = obj.commanderCardId;
+        for (const c of obj.cards as Array<Record<string, unknown>>) {
+          const cardObj = c.card as Record<string, unknown> | undefined;
+          const isCmd = Boolean(commanderId && (c.cardId === commanderId || cardObj?.id === commanderId));
+          const entry = extractEntry(c, false, isCmd);
+          if (entry) parsed.push(entry);
+        }
+      }
+
+      // 4. Moxfield / Archidekt style (commanders, mainboard, sideboard)
+      if (Array.isArray(obj.commanders)) {
+        for (const c of obj.commanders as Array<Record<string, unknown>>) {
+          const entry = extractEntry(c, false, true);
+          if (entry) parsed.push(entry);
+        }
+      }
+      if (Array.isArray(obj.mainboard)) {
+        for (const c of obj.mainboard as Array<Record<string, unknown>>) {
+          const entry = extractEntry(c, false, false);
+          if (entry) parsed.push(entry);
+        }
+      }
+      if (Array.isArray(obj.sideboard)) {
+        for (const c of obj.sideboard as Array<Record<string, unknown>>) {
+          const entry = extractEntry(c, true, false);
+          if (entry) parsed.push(entry);
+        }
+      }
+    }
+
+    return parsed;
+  } catch {
+    return [];
+  }
 }
 
 /** Formats a deck into MTG Arena text format */

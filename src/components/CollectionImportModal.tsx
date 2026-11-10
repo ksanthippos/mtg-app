@@ -39,7 +39,7 @@ export function CollectionImportModal({
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <h2 id="collection-import-title" className="text-lg font-semibold text-white">
-              Tuo kokoelma – ManaBox / CSV
+              Tuo kokoelma – JSON / ManaBox / CSV
             </h2>
             <p className="mt-0.5 text-xs text-slate-400">
               Tiedosto: <span className="text-slate-200 font-medium">{fileName}</span>
