@@ -3113,29 +3113,44 @@ function App() {
                 const imageUrl = getCardImageUrl(cardWithSelectedFace, 'small');
                 return (
                   <div key={card.id} className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
-                    <div className="mb-3 flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => openCardPreview(cardWithSelectedFace)}
-                        aria-label={`Näytä ${card.name} isompana`}
-                        className="shrink-0 rounded-md focus:outline-none focus:ring-2 focus:ring-violet-400"
-                      >
-                        <img
-                          src={imageUrl ?? 'https://placehold.co/80x112/111827/9ca3af?text=MTG'}
-                          alt={card.name}
-                          loading="lazy"
-                          className="h-16 w-12 rounded-md object-cover"
-                        />
-                      </button>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-medium text-white">{card.name}</div>
-                        <div className="text-xs text-slate-400">
-                          {card.set.toUpperCase()} · #{card.collector_number} · {card.rarity}
-                          {formatCardPrice(card) && (
-                            <span className="ml-1.5 font-medium text-emerald-400">· {formatCardPrice(card)}</span>
-                          )}
+                    <div className="mb-3 flex items-start justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => openCardPreview(cardWithSelectedFace)}
+                          aria-label={`Näytä ${card.name} isompana`}
+                          className="shrink-0 rounded-md focus:outline-none focus:ring-2 focus:ring-violet-400"
+                        >
+                          <img
+                            src={imageUrl ?? 'https://placehold.co/80x112/111827/9ca3af?text=MTG'}
+                            alt={card.name}
+                            loading="lazy"
+                            className="h-16 w-12 rounded-md object-cover"
+                          />
+                        </button>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium text-white">{card.name}</div>
+                          <div className="text-xs text-slate-400">
+                            {card.set.toUpperCase()} · #{card.collector_number} · {card.rarity}
+                            {formatCardPrice(card) && (
+                              <span className="ml-1.5 font-medium text-emerald-400">· {formatCardPrice(card)}</span>
+                            )}
+                          </div>
                         </div>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => void toggleWishlistCard(cardWithSelectedFace)}
+                        aria-label={wishlistCardIds.has(card.id) ? `Poista ${card.name} toivelistalta` : `Lisää ${card.name} toivelistalle`}
+                        title={wishlistCardIds.has(card.id) ? 'Poista toivelistalta' : 'Lisää toivelistalle'}
+                        className={`shrink-0 rounded-lg border p-1.5 transition ${
+                          wishlistCardIds.has(card.id)
+                            ? 'border-rose-500/50 bg-rose-500/20 text-rose-300 hover:bg-rose-500/30'
+                            : 'border-slate-800 bg-slate-900/80 text-slate-400 hover:border-rose-500/50 hover:bg-slate-800 hover:text-rose-300'
+                        }`}
+                      >
+                        <Heart size={16} className={wishlistCardIds.has(card.id) ? 'fill-rose-400 text-rose-400' : ''} />
+                      </button>
                     </div>
                     <div className="mb-3 rounded-lg border border-slate-800 bg-[#111722] p-3">
                       {card.card_faces?.length ? (
@@ -3237,7 +3252,22 @@ function App() {
                           </span>
                         )}
                       </div>
-                      {renderCardActionMenu(cardWithSelectedFace, `search:${card.id}`, 'search')}
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => void toggleWishlistCard(cardWithSelectedFace)}
+                          aria-label={wishlistCardIds.has(card.id) ? `Poista ${card.name} toivelistalta` : `Lisää ${card.name} toivelistalle`}
+                          title={wishlistCardIds.has(card.id) ? 'Poista toivelistalta' : 'Lisää toivelistalle'}
+                          className={`rounded-lg border p-1.5 transition ${
+                            wishlistCardIds.has(card.id)
+                              ? 'border-rose-500/50 bg-rose-500/20 text-rose-300 hover:bg-rose-500/30'
+                              : 'border-slate-800 bg-slate-900 text-slate-400 hover:border-rose-500/50 hover:bg-slate-800 hover:text-rose-300'
+                          }`}
+                        >
+                          <Heart size={16} className={wishlistCardIds.has(card.id) ? 'fill-rose-400 text-rose-400' : ''} />
+                        </button>
+                        {renderCardActionMenu(cardWithSelectedFace, `search:${card.id}`, 'search')}
+                      </div>
                     </div>
                   </div>
                 );
