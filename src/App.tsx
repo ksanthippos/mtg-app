@@ -27,6 +27,7 @@ import {
   Shield,
   SlidersHorizontal,
   Trash2,
+  Undo2,
   Upload,
   X,
 } from 'lucide-react';
@@ -50,6 +51,7 @@ import {
 } from './utils/decklist';
 import { config } from './config.js';
 import { ManaCurve } from './components/ManaCurve';
+import { formatCardPrice } from './utils/deckStats';
 import { SampleHandModal } from './components/SampleHandModal';
 import { CardInfoModal } from './components/CardInfoModal';
 import { PrintingsModal } from './components/PrintingsModal';
@@ -141,9 +143,23 @@ type CardFilters = {
   releaseYear: string;
 };
 
-type CardSortKey = 'name' | 'manaValue' | 'addedAt';
+type CardSortKey = 'name' | 'manaValue' | 'price' | 'addedAt';
 type DeckSortKey = 'name' | 'createdAt';
 type SortDirection = 'asc' | 'desc';
+
+function getCardNumericPrice(card: MtgCard): number {
+  const pStr = card.prices?.eur || card.prices?.eur_foil;
+  if (pStr) {
+    const val = parseFloat(pStr);
+    if (!isNaN(val)) return val;
+  }
+  const uStr = card.prices?.usd || card.prices?.usd_foil;
+  if (uStr) {
+    const val = parseFloat(uStr);
+    if (!isNaN(val)) return val;
+  }
+  return -1;
+}
 
 function sortCardEntries<T extends { card: MtgCard; addedAt?: number }>(
   entries: T[],
@@ -161,6 +177,12 @@ function sortCardEntries<T extends { card: MtgCard; addedAt?: number }>(
       if (leftManaValue === undefined && rightManaValue !== undefined) return 1;
       if (leftManaValue !== undefined && rightManaValue === undefined) return -1;
       comparison = (leftManaValue ?? 0) - (rightManaValue ?? 0);
+    } else if (sortKey === 'price') {
+      const leftPrice = getCardNumericPrice(left.card);
+      const rightPrice = getCardNumericPrice(right.card);
+      if (leftPrice < 0 && rightPrice >= 0) return 1;
+      if (leftPrice >= 0 && rightPrice < 0) return -1;
+      comparison = leftPrice - rightPrice;
     } else {
       comparison = (left.addedAt ?? 0) - (right.addedAt ?? 0);
     }
@@ -321,7 +343,7 @@ function CardFilterControls({
               value={sortKey}
               onChange={(event) => {
                 const value = event.target.value;
-                if (value === 'name' || value === 'manaValue' || value === 'addedAt') {
+                if (value === 'name' || value === 'manaValue' || value === 'price' || value === 'addedAt') {
                   onSortKeyChange(value);
                 }
               }}
@@ -330,6 +352,7 @@ function CardFilterControls({
             >
               <option value="name">Nimi</option>
               <option value="manaValue">Manan arvo</option>
+              <option value="price">Hinta</option>
               <option value="addedAt">Lisäyspäivä</option>
             </select>
             <button
@@ -540,6 +563,8 @@ function App() {
   const [exportDeckMenuOpen, setExportDeckMenuOpen] = useState(false);
   const [deckNameInput, setDeckNameInput] = useState('');
   const [selectedDeckId, setSelectedDeckId] = useState<string | null>(null);
+  const [searchSortKey, setSearchSortKey] = useState<CardSortKey>('name');
+  const [searchSortDirection, setSearchSortDirection] = useState<SortDirection>('asc');
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<MtgCard[]>([]);
   const [selectedSearchFaces, setSelectedSearchFaces] = useState<Record<string, number>>({});
@@ -574,6 +599,9 @@ function App() {
   const [collectionImportLoading, setCollectionImportLoading] = useState(false);
   const [collectionImportProgress, setCollectionImportProgress] = useState<{ current: number; total: number } | null>(null);
   const [refreshingDeckPrices, setRefreshingDeckPrices] = useState(false);
+  const [refreshingAllPrices, setRefreshingAllPrices] = useState(false);
+  const [refreshingAllPricesProgress, setRefreshingAllPricesProgress] = useState<{ current: number; total: number } | null>(null);
+  const [deckUndoSnapshot, setDeckUndoSnapshot] = useState<{ deckId: string; deck: Deck; description: string } | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const selectedDeck = decks.find((deck) => deck.id === selectedDeckId) ?? null;
@@ -594,13 +622,15 @@ function App() {
   const collectionTotal = collection.reduce((sum, item) => sum + item.count, 0);
   const collectionTotalPriceEur = useMemo(() => {
     return collection.reduce((sum, item) => {
-      const p = item.card.prices?.eur ? parseFloat(item.card.prices.eur) : 0;
+      const pStr = item.card.prices?.eur || item.card.prices?.eur_foil;
+      const p = pStr ? parseFloat(pStr) : 0;
       return sum + (isNaN(p) ? 0 : p * item.count);
     }, 0);
   }, [collection]);
   const wishlistTotalPriceEur = useMemo(() => {
     return wishlist.reduce((sum, item) => {
-      const p = item.card.prices?.eur ? parseFloat(item.card.prices.eur) : 0;
+      const pStr = item.card.prices?.eur || item.card.prices?.eur_foil;
+      const p = pStr ? parseFloat(pStr) : 0;
       return sum + (isNaN(p) ? 0 : p);
     }, 0);
   }, [wishlist]);
@@ -712,9 +742,13 @@ function App() {
     () => searchResults.filter((card) => matchesCardFilters(card, searchFilters)),
     [searchResults, searchFilters],
   );
+  const sortedSearchResults = useMemo(
+    () => sortCardEntries(filteredSearchResults.map((card) => ({ card })), searchSortKey, searchSortDirection).map((e) => e.card),
+    [filteredSearchResults, searchSortKey, searchSortDirection],
+  );
   const visibleFilteredSearchResults = useMemo(
-    () => filteredSearchResults.slice(0, visibleSearchCount),
-    [filteredSearchResults, visibleSearchCount],
+    () => sortedSearchResults.slice(0, visibleSearchCount),
+    [sortedSearchResults, visibleSearchCount],
   );
   const previewCards = useMemo(() => {
     if (previewSource === 'printings') return printings;
@@ -1168,6 +1202,35 @@ function App() {
     }
   };
 
+  const saveDeckUndoSnapshot = (deck: Deck, description: string) => {
+    setDeckUndoSnapshot({
+      deckId: deck.id,
+      deck: {
+        ...deck,
+        cards: deck.cards.map((c) => ({ ...c, card: { ...c.card } })),
+      },
+      description,
+    });
+  };
+
+  const undoLastDeckChange = async () => {
+    if (!deckUndoSnapshot) return;
+    const { deck: restoredDeck, description } = deckUndoSnapshot;
+
+    try {
+      await db.decks.put(restoredDeck);
+      setDecks((prev) => prev.map((d) => (d.id === restoredDeck.id ? restoredDeck : d)));
+      setDeckUndoSnapshot(null);
+      const msg = `Kumottiin: ${description}. Pakka "${restoredDeck.name}" palautettu aiempaan tilaan.`;
+      setStatus(msg);
+      setToast(msg);
+    } catch (err) {
+      console.error('Pakan palautus epäonnistui:', err);
+      setStatus('Pakan palautus epäonnistui.');
+      setToast('Pakan palautus epäonnistui.');
+    }
+  };
+
   const saveCollectionChanges = async () => {
     if (dirtyCollectionIds.size === 0) return;
 
@@ -1262,6 +1325,8 @@ function App() {
 
     const deck = decks.find((item) => item.id === targetDeckId);
     if (!deck) return;
+
+    saveDeckUndoSnapshot(deck, `${card.name} (${count > 0 ? '+1' : '-1'})`);
 
     const nextCards = [...deck.cards];
     const existingIndex = nextCards.findIndex((entry) => entry.cardId === targetCardId);
@@ -1465,6 +1530,8 @@ function App() {
     const deck = decks.find((item) => item.id === selectedDeckId);
     if (!deck) return;
 
+    saveDeckUndoSnapshot(deck, `Korttien lisäys (${entries.length} kpl)`);
+
     const identifiers = entries.map((entry) => {
       if (entry.set && entry.collector_number) {
         return { set: entry.set, collector_number: entry.collector_number };
@@ -1524,6 +1591,125 @@ function App() {
     const msg = `Tuotiin ${entries.length} korttiriviä pakkaan ${deck.name}${sbCount > 0 ? ` (${sbCount} sideboardiin)` : ''}.`;
     setStatus(msg);
     setToast(msg);
+  };
+
+  const importAsNewDeck = async (entries: ParsedDeckEntry[], suggestedName?: string) => {
+    if (!entries.length) {
+      setStatus('Ei kortteja tuotavaksi.');
+      setToast('Ei kortteja tuotavaksi.');
+      return;
+    }
+
+    setStatus('Haetaan kortteja Scryfallista uuteen pakkaan…');
+    setToast('Haetaan kortteja Scryfallista…');
+
+    try {
+      const identifiers = entries.map((entry) => {
+        if (entry.scryfall_id) return { id: entry.scryfall_id };
+        if (entry.set && entry.collector_number) {
+          return { set: entry.set, collector_number: entry.collector_number };
+        }
+        return { name: entry.name };
+      });
+
+      const { found } = await fetchCardsBatch(identifiers);
+      const cardsById = new Map<string, MtgCard>(found.map((c) => [c.id, c]));
+      const cardsByName = new Map<string, MtgCard>(found.map((c) => [c.name.toLowerCase(), c]));
+      const cardsBySetNumber = new Map<string, MtgCard>(
+        found.map((c) => [`${c.set.toLowerCase()}:${c.collector_number.toLowerCase()}`, c]),
+      );
+
+      const nextCards: DeckCard[] = [];
+      const importedCardCounts = new Map<string, { card: MtgCard; count: number }>();
+      let commanderCandidateId: string | undefined;
+
+      for (const entry of entries) {
+        const card =
+          (entry.scryfall_id && cardsById.get(entry.scryfall_id)) ||
+          (entry.set && entry.collector_number && cardsBySetNumber.get(`${entry.set.toLowerCase()}:${entry.collector_number.toLowerCase()}`)) ||
+          cardsByName.get(entry.name.toLowerCase());
+
+        if (!card) continue;
+
+        const isSideboard = Boolean(entry.isSideboard);
+        if (entry.isCommander && !commanderCandidateId) {
+          commanderCandidateId = card.id;
+        }
+
+        const existingIndex = nextCards.findIndex(
+          (item) => item.cardId === card.id && Boolean(item.isSideboard) === isSideboard,
+        );
+
+        if (existingIndex >= 0) {
+          nextCards[existingIndex] = {
+            ...nextCards[existingIndex],
+            count: nextCards[existingIndex].count + entry.count,
+          };
+        } else {
+          nextCards.push({
+            cardId: card.id,
+            card,
+            count: entry.count,
+            addedAt: Date.now(),
+            isSideboard,
+          });
+        }
+
+        const imported = importedCardCounts.get(card.id);
+        importedCardCounts.set(card.id, { card, count: (imported?.count ?? 0) + entry.count });
+      }
+
+      if (nextCards.length === 0) {
+        setStatus('Kortteja ei löytynyt Scryfallista.');
+        setToast('Kortteja ei löytynyt Scryfallista.');
+        return;
+      }
+
+      if (!commanderCandidateId) {
+        const firstLegendary = nextCards.find((c) => !c.isSideboard && c.card.type_line?.toLowerCase().includes('legendary creature'));
+        if (firstLegendary && nextCards.reduce((s, c) => s + c.count, 0) >= 60) {
+          commanderCandidateId = firstLegendary.cardId;
+        }
+      }
+
+      const defaultName = suggestedName?.trim()
+        ? suggestedName.trim()
+        : commanderCandidateId
+          ? `${cardsById.get(commanderCandidateId)?.name ?? 'Commander'} -pakka`
+          : `Tuotu pakka ${new Date().toLocaleDateString('fi-FI')}`;
+
+      const now = Date.now();
+      const newDeck: Deck = {
+        id: crypto.randomUUID(),
+        name: defaultName,
+        format: commanderCandidateId ? 'Commander' : 'Standard',
+        cards: nextCards,
+        commanderCardId: commanderCandidateId,
+        createdAt: now,
+        updatedAt: now,
+        active: true,
+      };
+
+      await db.decks.put(newDeck);
+      setDecks((prev) => [newDeck, ...prev]);
+      setSelectedDeckId(newDeck.id);
+
+      // Ensure all cards in the newly created deck are added to the collection!
+      for (const { card, count } of importedCardCounts.values()) {
+        await ensureCardInCollection(card, count);
+      }
+
+      const totalCount = nextCards.reduce((s, c) => s + c.count, 0);
+      const msg = `Uusi pakka "${newDeck.name}" luotu tuonnista (${totalCount} korttia)! Kortit lisätty kokoelmaan.`;
+      setStatus(msg);
+      setToast(msg);
+      setImportText('');
+      setTab('decks');
+    } catch (err) {
+      console.error('Uuden pakan tuonti epäonnistui:', err);
+      setStatus('Uuden pakan tuonti epäonnistui.');
+      setToast('Uuden pakan tuonti epäonnistui.');
+    }
   };
 
   const handleExport = (scope: 'all' | 'deck' | 'collection', deck?: Deck) => {
@@ -1659,6 +1845,149 @@ function App() {
     }
   };
 
+  const refreshAllPrices = async () => {
+    setRefreshingAllPrices(true);
+    setStatus('Päivitetään kokoelman ja pakkojen hintoja Scryfallista…');
+
+    try {
+      // 0. Make sure all cards in decks are also registered in the collection
+      const existingCollectionMap = new Map<string, CollectionCard>(collection.map((c) => [c.id, c]));
+      const now = Date.now();
+      let addedToCollection = false;
+
+      for (const deck of decks) {
+        for (const entry of deck.cards) {
+          if (!existingCollectionMap.has(entry.card.id)) {
+            existingCollectionMap.set(entry.card.id, {
+              id: entry.card.id,
+              card: entry.card,
+              count: entry.count,
+              addedAt: now,
+            });
+            addedToCollection = true;
+          }
+        }
+      }
+
+      if (addedToCollection) {
+        const fullCollection = Array.from(existingCollectionMap.values());
+        await db.collection.bulkPut(fullCollection);
+        setCollection(fullCollection);
+      }
+
+      // 1. Gather all unique cards across collection, all decks, and wishlist
+      const cardMap = new Map<string, MtgCard>();
+      for (const item of existingCollectionMap.values()) {
+        if (item.card) cardMap.set(item.card.id, item.card);
+      }
+      for (const deck of decks) {
+        for (const dc of deck.cards) {
+          if (dc.card) cardMap.set(dc.card.id, dc.card);
+        }
+      }
+      for (const item of wishlist) {
+        if (item.card) cardMap.set(item.card.id, item.card);
+      }
+
+      const allCards = Array.from(cardMap.values());
+      const totalCards = allCards.length;
+      if (totalCards === 0) {
+        setStatus('Ei kortteja päivitettäväksi.');
+        return;
+      }
+
+      setRefreshingAllPricesProgress({ current: 0, total: totalCards });
+
+      const chunkSize = 75;
+      const allFound: MtgCard[] = [];
+
+      for (let i = 0; i < totalCards; i += chunkSize) {
+        const chunk = allCards.slice(i, i + chunkSize);
+        const identifiers = chunk.map((c) => {
+          if (c.id) return { id: c.id };
+          if (c.set && c.collector_number) {
+            return { set: c.set, collector_number: c.collector_number };
+          }
+          return { name: c.name };
+        });
+
+        const { found } = await fetchCardsBatch(identifiers);
+        allFound.push(...found);
+        setRefreshingAllPricesProgress({
+          current: Math.min(i + chunkSize, totalCards),
+          total: totalCards,
+        });
+      }
+
+      const foundById = new Map<string, MtgCard>(allFound.map((c) => [c.id, c]));
+      const foundBySetNum = new Map<string, MtgCard>(
+        allFound.map((c) => [`${c.set.toLowerCase()}:${c.collector_number.toLowerCase()}`, c]),
+      );
+      const foundByName = new Map<string, MtgCard>(allFound.map((c) => [c.name.toLowerCase(), c]));
+
+      const getFreshPrice = (c: MtgCard) => {
+        const fresh =
+          foundById.get(c.id) ??
+          foundBySetNum.get(`${c.set.toLowerCase()}:${c.collector_number.toLowerCase()}`) ??
+          foundByName.get(c.name.toLowerCase());
+        return fresh?.prices ?? c.prices;
+      };
+
+      // 2. Update Collection
+      const nextCollection = Array.from(existingCollectionMap.values()).map((item) => ({
+        ...item,
+        card: {
+          ...item.card,
+          prices: getFreshPrice(item.card),
+        },
+      }));
+      await db.collection.bulkPut(nextCollection);
+      setCollection(nextCollection);
+
+      // 3. Update Decks
+      const nextDecks = decks.map((deck) => ({
+        ...deck,
+        cards: deck.cards.map((entry) => ({
+          ...entry,
+          card: {
+            ...entry.card,
+            prices: getFreshPrice(entry.card),
+          },
+        })),
+        updatedAt: Date.now(),
+      }));
+      await db.decks.bulkPut(nextDecks);
+      setDecks(nextDecks);
+
+      // 4. Update Wishlist
+      const nextWishlist = wishlist.map((item) => ({
+        ...item,
+        card: {
+          ...item.card,
+          prices: getFreshPrice(item.card),
+        },
+      }));
+      await db.wishlist.bulkPut(nextWishlist);
+      setWishlist(nextWishlist);
+
+      // 5. Update Card Cache
+      for (const fresh of allFound) {
+        await db.cardCache.put({ ...fresh, cached_at: Date.now() }).catch(() => {});
+      }
+
+      const msg = `Kaikki hinnat päivitetty (${allFound.length} / ${totalCards} korttia)!`;
+      setStatus(msg);
+      setToast(msg);
+    } catch (err) {
+      console.error('Kokoelman hintojen päivitys epäonnistui:', err);
+      setStatus('Hintojen päivitys epäonnistui.');
+      setToast('Hintojen päivitys epäonnistui.');
+    } finally {
+      setRefreshingAllPrices(false);
+      setRefreshingAllPricesProgress(null);
+    }
+  };
+
   const handleFileImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -1687,6 +2016,13 @@ function App() {
         await refreshCollection();
         await refreshWishlist();
 
+        // Ensure all deck cards are also in collection
+        for (const d of importedDecks) {
+          for (const entry of d.cards) {
+            await ensureCardInCollection(entry.card, entry.count);
+          }
+        }
+
         const decksNeedPrices = importedDecks.filter((d) => d.cards.some((c) => !c.card?.prices));
         if (decksNeedPrices.length > 0) {
           setStatus('Import onnistui! Haetaan puuttuvia hintoja Scryfallista…');
@@ -1701,7 +2037,8 @@ function App() {
       } else {
         const parsed = file.name.toLowerCase().endsWith('.csv') ? parseCsvImport(raw) : parseDecklistText(raw);
         if (parsed.length) {
-          await applyImportedEntries(parsed);
+          const suggestedName = file.name.replace(/\.[^/.]+$/, '');
+          await importAsNewDeck(parsed, suggestedName);
         } else {
           setStatus('Tiedostosta ei löytynyt kortteja');
         }
@@ -1872,6 +2209,7 @@ function App() {
 
   const moveDeckCardToSideboard = async (entry: DeckCard, isSideboard: boolean) => {
     if (!selectedDeck) return;
+    saveDeckUndoSnapshot(selectedDeck, `${entry.card.name} siirto ${isSideboard ? 'sideboardiin' : 'pakan kortteihin'}`);
     if (isSideboard) await ensureCardInCollection(entry.card, entry.count);
     const cards = selectedDeck.cards.map((item) => item.cardId === entry.cardId ? { ...item, isSideboard } : item);
     await updateDeck({
@@ -1896,6 +2234,8 @@ function App() {
       setCardMoveRequest(null);
       return;
     }
+
+    saveDeckUndoSnapshot(sourceDeck, `${movingEntry.card.name} siirto toiseen pakkaan`);
 
     const sameFace = (left: DeckCard, right: DeckCard) =>
       left.card.id === right.card.id
@@ -2216,8 +2556,8 @@ function App() {
             <div className="mt-2 flex items-center justify-between">
               <div>
                 <span className="text-sm font-semibold text-white">{entry.count} kpl</span>
-                {entry.card.prices?.eur && (
-                  <span className="ml-1.5 text-[11px] font-medium text-emerald-400">· {entry.card.prices.eur} €</span>
+                {formatCardPrice(entry.card) && (
+                  <span className="ml-1.5 text-[11px] font-medium text-emerald-400">· {formatCardPrice(entry.card)}</span>
                 )}
               </div>
               {renderDeckCardMenu(entry)}
@@ -2242,8 +2582,8 @@ function App() {
             </button>
             <div className="text-right">
               <div className="min-w-10 text-sm font-semibold text-white">{entry.count} kpl</div>
-              {entry.card.prices?.eur && (
-                <div className="text-[11px] font-medium text-emerald-400">{entry.card.prices.eur} €</div>
+              {formatCardPrice(entry.card) && (
+                <div className="text-[11px] font-medium text-emerald-400">{formatCardPrice(entry.card)}</div>
               )}
             </div>
             {renderDeckCardMenu(entry)}
@@ -2531,6 +2871,17 @@ function App() {
                         <Shield size={16} />
                         Sideboard ({sideboardTotal})
                       </button>
+                      {deckUndoSnapshot && deckUndoSnapshot.deckId === selectedDeck.id && (
+                        <button
+                          type="button"
+                          onClick={() => void undoLastDeckChange()}
+                          title={`Kumoa: ${deckUndoSnapshot.description}`}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-200 hover:bg-amber-500/20"
+                        >
+                          <Undo2 size={16} />
+                          Kumoa muutos
+                        </button>
+                      )}
                       <CardViewToggle view={cardView} onChange={setCardView} />
                     </div>
                   </div>
@@ -2674,7 +3025,14 @@ function App() {
               )}
             </div>
 
-            <CardFilterControls filters={searchFilters} onChange={setSearchFilters} />
+            <CardFilterControls
+              filters={searchFilters}
+              onChange={setSearchFilters}
+              sortKey={searchSortKey}
+              onSortKeyChange={setSearchSortKey}
+              sortDirection={searchSortDirection}
+              onSortDirectionChange={setSearchSortDirection}
+            />
             {loading && <p className="mb-4 text-sm text-slate-400">Haetaan kortteja...</p>}
             {!loading && searchTerm.trim().length >= 2 && (
               <p className="mb-4 text-sm text-slate-400">
@@ -2708,7 +3066,12 @@ function App() {
                       </button>
                       <div className="min-w-0 flex-1">
                         <div className="truncate font-medium text-white">{card.name}</div>
-                        <div className="text-xs text-slate-400">{card.set.toUpperCase()} · #{card.collector_number} · {card.rarity}</div>
+                        <div className="text-xs text-slate-400">
+                          {card.set.toUpperCase()} · #{card.collector_number} · {card.rarity}
+                          {formatCardPrice(card) && (
+                            <span className="ml-1.5 font-medium text-emerald-400">· {formatCardPrice(card)}</span>
+                          )}
+                        </div>
                       </div>
                     </div>
                     <div className="mb-3 rounded-lg border border-slate-800 bg-[#111722] p-3">
@@ -2850,6 +3213,20 @@ function App() {
                     ~{collectionTotalPriceEur.toFixed(2)} €
                   </span>
                 )}
+                <button
+                  type="button"
+                  onClick={() => void refreshAllPrices()}
+                  disabled={refreshingAllPrices}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  title="Päivittää kokoelman ja kaikkien pakkojen korttien hinnat Scryfallista"
+                >
+                  <RefreshCw size={14} className={refreshingAllPrices ? 'animate-spin' : ''} />
+                  {refreshingAllPrices
+                    ? refreshingAllPricesProgress
+                      ? `Päivitetään (${refreshingAllPricesProgress.current}/${refreshingAllPricesProgress.total})…`
+                      : 'Päivitetään hintoja…'
+                    : 'Päivitä kaikki hinnat'}
+                </button>
                 <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-200 hover:border-violet-500 hover:bg-slate-800">
                   <Upload size={14} />
                   Tuo kokoelma (ManaBox / CSV)
@@ -2941,8 +3318,8 @@ function App() {
                         <div className="mt-2 flex items-center justify-between">
                           <div>
                             <span className="text-sm font-semibold text-white">{entry.count} kpl</span>
-                            {entry.card.prices?.eur && (
-                              <span className="ml-1.5 text-[11px] font-medium text-emerald-400">· {entry.card.prices.eur} €</span>
+                            {formatCardPrice(entry.card) && (
+                              <span className="ml-1.5 text-[11px] font-medium text-emerald-400">· {formatCardPrice(entry.card)}</span>
                             )}
                           </div>
                           {renderCardActionMenu(entry.card, `collection:${entry.id}`, 'collection')}
@@ -2968,8 +3345,8 @@ function App() {
                         <div className="flex flex-wrap items-center justify-end gap-2">
                           <div className="text-right">
                             <div className="min-w-10 text-sm font-semibold text-white">{entry.count} kpl</div>
-                            {entry.card.prices?.eur && (
-                              <div className="text-[11px] font-medium text-emerald-400">{entry.card.prices.eur} €</div>
+                            {formatCardPrice(entry.card) && (
+                              <div className="text-[11px] font-medium text-emerald-400">{formatCardPrice(entry.card)}</div>
                             )}
                           </div>
                           {renderCardActionMenu(entry.card, `collection:${entry.id}`, 'collection')}
@@ -3040,8 +3417,8 @@ function App() {
                         <div className="mt-2 flex items-center justify-between">
                           <div>
                             <span className="inline-flex items-center gap-1 text-xs text-rose-200"><Heart size={13} className="fill-rose-300" /> Toivelistalla</span>
-                            {entry.card.prices?.eur && (
-                              <span className="ml-1.5 text-[11px] font-medium text-emerald-400">· {entry.card.prices.eur} €</span>
+                            {formatCardPrice(entry.card) && (
+                              <span className="ml-1.5 text-[11px] font-medium text-emerald-400">· {formatCardPrice(entry.card)}</span>
                             )}
                           </div>
                           {renderCardActionMenu(entry.card, `wishlist:${entry.id}`, 'wishlist')}
@@ -3057,8 +3434,8 @@ function App() {
                           <div className="mt-1 text-xs text-slate-400">{entry.card.type_line} · {entry.card.set.toUpperCase()} #{entry.card.collector_number}</div>
                         </button>
                         <div className="flex flex-wrap items-center justify-end gap-2">
-                          {entry.card.prices?.eur && (
-                            <span className="text-[11px] font-medium text-emerald-400">{entry.card.prices.eur} €</span>
+                          {formatCardPrice(entry.card) && (
+                            <span className="text-[11px] font-medium text-emerald-400">{formatCardPrice(entry.card)}</span>
                           )}
                           <span className="inline-flex items-center gap-1 text-xs text-rose-200"><Heart size={13} className="fill-rose-300" /></span>
                           {renderCardActionMenu(entry.card, `wishlist:${entry.id}`, 'wishlist')}
@@ -3085,11 +3462,21 @@ function App() {
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
+                  onClick={() => void importAsNewDeck(importEntries)}
+                  disabled={importEntries.length === 0}
+                  className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-3.5 py-2 text-sm font-medium text-white shadow-md transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <FolderPlus size={16} />
+                  Tuo uutena pakkana
+                </button>
+                <button
+                  type="button"
                   onClick={() => void applyImportedEntries(importEntries)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                  disabled={importEntries.length === 0}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Layers size={16} />
-                  Lisää pakkaan
+                  Lisää valittuun pakkaan
                 </button>
                 <button
                   type="button"

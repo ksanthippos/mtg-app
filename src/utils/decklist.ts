@@ -6,6 +6,7 @@ export type ParsedDeckEntry = {
   set?: string;
   collector_number?: string;
   isSideboard?: boolean;
+  isCommander?: boolean;
 };
 
 export function parseDecklistText(rawText: string): ParsedDeckEntry[] {
@@ -14,19 +15,23 @@ export function parseDecklistText(rawText: string): ParsedDeckEntry[] {
   const rawLines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const parsed: ParsedDeckEntry[] = [];
   let inSideboard = false;
+  let inCommander = false;
 
   for (let line of rawLines) {
-    // Check section headers (e.g. "Sideboard", "SB:", "// Sideboard", "Mainboard", "// Main")
+    // Check section headers (e.g. "Sideboard", "SB:", "// Sideboard", "Mainboard", "// Main", "// Commander")
+    if (/^(\/\/\s*)?(commander|general)\b/i.test(line)) {
+      inCommander = true;
+      inSideboard = false;
+      continue;
+    }
     if (/^(\/\/\s*)?(sideboard|sb:|board|side)\b/i.test(line)) {
       inSideboard = true;
+      inCommander = false;
       continue;
     }
     if (/^(\/\/\s*)?(mainboard|main deck|deck|main)\b/i.test(line)) {
       inSideboard = false;
-      continue;
-    }
-    if (/^(\/\/\s*)?(commander|general)\b/i.test(line)) {
-      inSideboard = false;
+      inCommander = false;
       continue;
     }
     // Skip general comment lines
@@ -35,6 +40,7 @@ export function parseDecklistText(rawText: string): ParsedDeckEntry[] {
     }
 
     let isSideboard = inSideboard;
+    let isCommander = inCommander;
     if (/^sb:\s*/i.test(line)) {
       isSideboard = true;
       line = line.replace(/^sb:\s*/i, '');
@@ -82,7 +88,11 @@ export function parseDecklistText(rawText: string): ParsedDeckEntry[] {
         set,
         collector_number: collectorNumber,
         isSideboard,
+        isCommander,
       });
+      if (inCommander) {
+        inCommander = false;
+      }
     }
   }
 
@@ -180,6 +190,7 @@ export function parseCsvImport(rawText: string): ParsedDeckEntry[] {
     const collectorNumber = (collectorNumberIndex >= 0 ? cells[collectorNumberIndex] : '')?.replace(/^"|"$/g, '').trim() || undefined;
     const area = (areaIndex >= 0 ? cells[areaIndex] : '')?.replace(/^"|"$/g, '').toLowerCase().trim();
     const isSideboard = area === 'sideboard' || area === 'sb';
+    const isCommander = area === 'commander' || area === 'command';
 
     const count = Number(rawCount) || 1;
     if (rawName || scryfallId) {
@@ -191,6 +202,7 @@ export function parseCsvImport(rawText: string): ParsedDeckEntry[] {
         set,
         collector_number: collectorNumber,
         isSideboard,
+        isCommander,
       });
     }
   }

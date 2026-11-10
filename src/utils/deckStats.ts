@@ -1,4 +1,4 @@
-import type { DeckCard } from '../types';
+import type { DeckCard, MtgCard } from '../types';
 
 export interface ManaCurveBucket {
   cmc: number;
@@ -54,6 +54,15 @@ const BASIC_LANDS = new Set([
   'snow-covered forest',
 ]);
 
+export function formatCardPrice(card?: MtgCard): string | null {
+  if (!card?.prices) return null;
+  if (card.prices.eur) return `${card.prices.eur} €`;
+  if (card.prices.eur_foil) return `${card.prices.eur_foil} € (f)`;
+  if (card.prices.usd) return `~$${card.prices.usd}`;
+  if (card.prices.usd_foil) return `~$${card.prices.usd_foil}`;
+  return null;
+}
+
 export function calculateDeckStats(
   cards: DeckCard[],
   commanderCardId?: string,
@@ -96,8 +105,10 @@ export function calculateDeckStats(
   for (const entry of cards) {
     const card = entry.card;
     const isLand = (card.type_line || '').toLowerCase().includes('land');
-    const eur = card.prices?.eur ? parseFloat(card.prices.eur) : null;
-    const usd = card.prices?.usd ? parseFloat(card.prices.usd) : null;
+    const eurStr = card.prices?.eur || card.prices?.eur_foil;
+    const eur = eurStr ? parseFloat(eurStr) : null;
+    const usdStr = card.prices?.usd || card.prices?.usd_foil;
+    const usd = usdStr ? parseFloat(usdStr) : null;
 
     if (eur && !isNaN(eur)) {
       totalPriceEur += eur * entry.count;
