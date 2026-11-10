@@ -20,6 +20,7 @@ import {
   Minus,
   Pencil,
   Plus,
+  RefreshCw,
   RotateCw,
   Save,
   Search,
@@ -572,6 +573,7 @@ function App() {
   } | null>(null);
   const [collectionImportLoading, setCollectionImportLoading] = useState(false);
   const [collectionImportProgress, setCollectionImportProgress] = useState<{ current: number; total: number } | null>(null);
+  const [refreshingDeckPrices, setRefreshingDeckPrices] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const selectedDeck = decks.find((deck) => deck.id === selectedDeckId) ?? null;
@@ -1580,6 +1582,83 @@ function App() {
     setStatus(`${scope === 'deck' ? `Pakan ${deck?.name ?? ''}` : scope === 'collection' ? 'Kokoelman' : 'Tietojen'} vienti valmis (${extension.toUpperCase()}).`);
   };
 
+  const refreshDeckPrices = async (deckToUpdate?: Deck) => {
+    const targetDeck = deckToUpdate ?? selectedDeck;
+    if (!targetDeck || targetDeck.cards.length === 0) return;
+
+    setRefreshingDeckPrices(true);
+    setStatus(`Päivitetään pakan "${targetDeck.name}" hintoja Scryfallista…`);
+
+    try {
+      const chunkSize = 75;
+      const allFound: MtgCard[] = [];
+      const cards = targetDeck.cards;
+
+      for (let i = 0; i < cards.length; i += chunkSize) {
+        const chunk = cards.slice(i, i + chunkSize);
+        const identifiers = chunk.map((c) => {
+          if (c.card.id) return { id: c.card.id };
+          if (c.card.set && c.card.collector_number) {
+            return { set: c.card.set, collector_number: c.card.collector_number };
+          }
+          return { name: c.card.name };
+        });
+        const { found } = await fetchCardsBatch(identifiers);
+        allFound.push(...found);
+      }
+
+      const foundById = new Map<string, MtgCard>(allFound.map((c) => [c.id, c]));
+      const foundBySetNum = new Map<string, MtgCard>(
+        allFound.map((c) => [`${c.set.toLowerCase()}:${c.collector_number.toLowerCase()}`, c]),
+      );
+      const foundByName = new Map<string, MtgCard>(allFound.map((c) => [c.name.toLowerCase(), c]));
+
+      let updatedCount = 0;
+      const updatedCards = targetDeck.cards.map((entry) => {
+        const fresh =
+          foundById.get(entry.card.id) ??
+          foundBySetNum.get(`${entry.card.set.toLowerCase()}:${entry.card.collector_number.toLowerCase()}`) ??
+          foundByName.get(entry.card.name.toLowerCase());
+
+        if (fresh?.prices) {
+          updatedCount++;
+          return {
+            ...entry,
+            card: {
+              ...entry.card,
+              prices: fresh.prices,
+            },
+          };
+        }
+        return entry;
+      });
+
+      const updatedDeck: Deck = {
+        ...targetDeck,
+        cards: updatedCards,
+        updatedAt: Date.now(),
+      };
+
+      await db.decks.put(updatedDeck);
+      for (const c of updatedCards) {
+        if (c.card.prices) {
+          await db.cardCache.put({ ...c.card, cached_at: Date.now() }).catch(() => {});
+        }
+      }
+
+      setDecks((prev) => prev.map((d) => (d.id === updatedDeck.id ? updatedDeck : d)));
+      const msg = `Pakan "${targetDeck.name}" hinnat päivitetty (${updatedCount} korttia)!`;
+      setStatus(msg);
+      setToast(msg);
+    } catch (err) {
+      console.error('Hintojen päivitys epäonnistui:', err);
+      setStatus('Hintojen päivitys epäonnistui.');
+      setToast('Hintojen päivitys epäonnistui.');
+    } finally {
+      setRefreshingDeckPrices(false);
+    }
+  };
+
   const handleFileImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -1596,18 +1675,29 @@ function App() {
         if (!parsed || (!parsed.decks && !parsed.collection && !parsed.wishlist)) {
           throw new Error('Virheellinen JSON');
         }
+        const importedDecks = parsed.decks ?? [];
         await importAllData({
           version: 2,
           exportedAt: Date.now(),
-          decks: parsed.decks ?? [],
+          decks: importedDecks,
           collection: parsed.collection ?? [],
           wishlist: parsed.wishlist ?? [],
         }, 'merge');
         await refreshDecks();
         await refreshCollection();
         await refreshWishlist();
-        setStatus('Import onnistui');
-        setToast('Tuonti onnistui.');
+
+        const decksNeedPrices = importedDecks.filter((d) => d.cards.some((c) => !c.card?.prices));
+        if (decksNeedPrices.length > 0) {
+          setStatus('Import onnistui! Haetaan puuttuvia hintoja Scryfallista…');
+          setToast('Tuonti onnistui. Haetaan puuttuvia hintoja…');
+          for (const deckToBackfill of decksNeedPrices) {
+            await refreshDeckPrices(deckToBackfill);
+          }
+        } else {
+          setStatus('Import onnistui');
+          setToast('Tuonti onnistui.');
+        }
       } else {
         const parsed = file.name.toLowerCase().endsWith('.csv') ? parseCsvImport(raw) : parseDecklistText(raw);
         if (parsed.length) {
@@ -2388,6 +2478,17 @@ function App() {
                           </button>
                           <button
                             type="button"
+                            onClick={() => {
+                              setOpenDeckMenuId(null);
+                              void refreshDeckPrices(deck);
+                            }}
+                            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-slate-200 hover:bg-slate-800"
+                          >
+                            <RefreshCw size={14} />
+                            Päivitä pakan hinnat
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => void removeDeck(deck.id)}
                             className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-red-300 hover:bg-red-950/60"
                           >
@@ -2441,6 +2542,8 @@ function App() {
                     symbols={symbolUris}
                     onPlaytestClick={() => setPlaytestDeck(selectedDeck)}
                     onArenaExportClick={() => void handleCopyArenaExport(selectedDeck)}
+                    onRefreshPricesClick={() => void refreshDeckPrices(selectedDeck)}
+                    isRefreshingPrices={refreshingDeckPrices}
                   />
 
                   <CardFilterControls

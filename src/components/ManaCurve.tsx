@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, BarChart3, ChevronDown, Sparkles } from 'lucide-react';
+import { AlertTriangle, BarChart3, ChevronDown, RefreshCw, Sparkles } from 'lucide-react';
 import type { DeckCard } from '../types';
 import { calculateDeckStats } from '../utils/deckStats';
 
@@ -10,6 +10,8 @@ interface ManaCurveProps {
   symbols: Map<string, string>;
   onPlaytestClick?: () => void;
   onArenaExportClick?: () => void;
+  onRefreshPricesClick?: () => void;
+  isRefreshingPrices?: boolean;
 }
 
 export function ManaCurve({
@@ -19,6 +21,8 @@ export function ManaCurve({
   symbols,
   onPlaytestClick,
   onArenaExportClick,
+  onRefreshPricesClick,
+  isRefreshingPrices = false,
 }: ManaCurveProps) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -89,6 +93,19 @@ export function ManaCurve({
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white"
             >
               Kopioi Arenaan
+            </button>
+          )}
+
+          {onRefreshPricesClick && (
+            <button
+              type="button"
+              onClick={onRefreshPricesClick}
+              disabled={isRefreshingPrices}
+              title="Päivitä pakan korttien hinnat Scryfallista"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white disabled:cursor-wait disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={isRefreshingPrices ? 'animate-spin text-violet-400' : ''} />
+              {isRefreshingPrices ? 'Päivitetään...' : 'Päivitä hinnat'}
             </button>
           )}
         </div>
